@@ -313,6 +313,14 @@ def find_server_url(log=print):
     환경변수 → (젯슨 자신이면 localhost) → 기억한 주소 → POS 의 jetson.json → 기본 주소
     → 같은 네트워크 훑기. POS 폴더가 아닌 곳(하위 폴더 등)에 풀어도 찾는다.
     """
+    global PORT
+    # POS 와 같은 jetson.json 의 infer_port 를 따른다 (포트를 바꾼 현장)
+    for f in (BASE_DIR / "jetson.json", BASE_DIR.parent / "jetson.json"):
+        try:
+            PORT = int(json.loads(f.read_text(encoding="utf-8")).get("infer_port", PORT))
+            break
+        except Exception:
+            continue
     cands = [os.environ.get("BREADVISION_AUTOLABEL_URL", "")]
     if Path("/etc/nv_tegra_release").exists():
         cands.append("127.0.0.1")
