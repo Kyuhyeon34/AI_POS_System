@@ -1,0 +1,62 @@
+{
+  "0": {
+    "class_name": "baggette",
+    "display_name": "바게트",
+    "price": 0
+  },
+  "1": {
+    "class_name": "muffine",
+    "display_name": "머핀",
+    "price": 0
+  },
+  "2": {
+    "class_name": "pizza",
+    "display_name": "피자빵",
+    "price": 0
+  },
+  "3": {
+    "class_name": "moca",
+    "display_name": "모카빵",
+    "price": 0
+  },
+  "4": {
+    "class_name": "salt",
+    "display_name": "소금빵",
+    "price": 0
+  },
+  "5": {
+    "class_name": "pie",
+    "display_name": "파이",
+    "price": 0
+  },
+  "6": {
+    "class_name": "fruit",
+    "display_name": "과일",
+    "price": 0
+  },
+  "7": {
+    "class_name": "rotus",
+    "display_name": "로투스",
+    "price": 0
+  },
+  "8": {
+    "class_name": "plain",
+    "display_name": "플레인",
+    "price": 0
+  },
+  "9": {
+    "class_name": "waffle",
+    "display_name": "와플",
+    "price": 0
+  },
+  "10": {
+    "class_name": "almond",
+    "display_name": "아몬드",
+    "price": 0
+  },
+  "11": {
+    "class_name": "maple",
+    "display_name": "메이플",
+    "price": 0
+  }
+}

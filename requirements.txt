@@ -1,0 +1,6 @@
+# 젯슨용 (JetPack 6.x). TensorRT·OpenCV·PyQt5 는 JetPack 에 들어 있는 것을 쓴다.
+# 보통은 ./jetson/install.sh 가 알아서 확인·설치한다.
+numpy
+requests>=2.25
+pyserial
+# pycuda  ← apt: python3-pycuda (없으면 pip install pycuda)

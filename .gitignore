@@ -1,0 +1,30 @@
+# ── 장비마다 새로 만드는 것 ─────────────────────────────
+# TensorRT 엔진은 그 젯슨 전용이라 올리지 않는다 (jetson/build_engines.sh 로 만든다)
+*.engine
+!*.engine.names.json
+!*.engine.scope.json
+
+# ── 현장에서 바뀌는 설정 (기본값은 *.example / *.default 로 들어 있다) ──
+database/settings.json
+database/products.json
+database/*.bak*
+jetson.json
+autolabel_server.json
+
+# ── 데이터·학습 결과 (용량이 커서 git 에 넣지 않는다) ──
+dataset/
+runs/
+backup/
+*.zip
+
+# ── 파이썬·편집기 찌꺼기 ────────────────────────────────
+__pycache__/
+*.pyc
+*.bak*
+*.orig
+*.log
+.vscode/
+.idea/
+
+# ── 턴테이블 펌웨어 빌드 결과 ───────────────────────────
+turntable/.pio/

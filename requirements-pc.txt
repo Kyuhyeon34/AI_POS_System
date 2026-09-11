@@ -1,0 +1,11 @@
+# PC 에서 GUI 만 돌릴 때 (Windows / macOS / Linux).
+# 추론은 젯슨이 하므로 TensorRT · pycuda 는 필요 없다.
+#
+#   py -3.11 -m pip install -r requirements-pc.txt
+#
+# 젯슨에는 이것을 쓰지 않는다. 젯슨은 JetPack 이 준 PyQt5/OpenCV 를 쓴다
+# (requirements.txt 참고).
+PyQt5>=5.15
+opencv-python>=4.5
+numpy
+requests>=2.28
