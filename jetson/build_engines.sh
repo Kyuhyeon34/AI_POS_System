@@ -59,7 +59,14 @@ for ENGINE in $ENGINES; do
     NAME=$(basename "$ENGINE" .engine)
     echo "[$n] $ONNX → $ENGINE   (5~10분 걸립니다. 화면이 멈춘 것처럼 보여도 기다려 주세요)"
     START=$(date +%s)
-    if "$TRTEXEC" --onnx="$ONNX" --saveEngine="$ENGINE" --fp16 > "$LOG_DIR/trt_$NAME.log" 2>&1; then
+    "$TRTEXEC" --onnx="$ONNX" --saveEngine="$ENGINE" --fp16 > "$LOG_DIR/trt_$NAME.log" 2>&1 &
+    TPID=$!
+    # 7분 동안 아무것도 안 나오면 멈춘 줄 안다. 30초마다 진행 중이라고 알려 준다.
+    while kill -0 "$TPID" 2>/dev/null; do
+        for _ in $(seq 1 30); do kill -0 "$TPID" 2>/dev/null || break; sleep 1; done
+        kill -0 "$TPID" 2>/dev/null && echo "    … 변환 중 $(( ($(date +%s) - START) / 60 ))분 $(( ($(date +%s) - START) % 60 ))초 경과 (정상입니다. 기다려 주세요)"
+    done
+    if wait "$TPID"; then
         echo "    완료 ($(( ($(date +%s) - START) / 60 ))분)  $(du -h "$ENGINE" | cut -f1)"
     else
         rm -f "$ENGINE"

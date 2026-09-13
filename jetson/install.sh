@@ -27,12 +27,39 @@ die()  { echo "   ❌ $*"; exit 1; }
 
 echo "BreadVision 젯슨 설치를 시작합니다.  (폴더: $ROOT)"
 echo
+echo "  ※ 중간에 [sudo] password 가 나오면 젯슨 비밀번호를 치고 Enter 를 누르세요."
+echo "    입력한 글자가 화면에 안 보이는 것이 정상입니다."
+echo
+
+# 새로 켠 젯슨은 우분투 자동 업데이트가 한동안 돈다. 그동안은 apt 설치가 막혀
+# 아무 말 없이 멈춘 것처럼 보이므로, 무엇을 기다리는지 보여 주며 기다린다.
+wait_apt() {
+    local waited=0
+    while pgrep -x apt >/dev/null || pgrep -x apt-get >/dev/null || pgrep -x dpkg >/dev/null \
+          || pgrep -f "bin/unattended-upgrade( |$)" >/dev/null; do
+        if [ $((waited % 30)) = 0 ]; then
+            echo "   ⏳ 다른 설치(우분투 자동 업데이트)가 끝나기를 기다리는 중… $((waited / 60))분 경과"
+        fi
+        sleep 5; waited=$((waited + 5))
+        if [ $waited -ge 1800 ]; then
+            warn "30분이 지나도 끝나지 않습니다. 재부팅 후 다시 실행해 보세요: sudo reboot"
+            return 1
+        fi
+    done
+    return 0
+}
 
 echo "[1/6] 젯슨 기본 구성 확인 (JetPack)"
 [ -f /etc/nv_tegra_release ] || warn "젯슨이 아닌 것 같습니다. (이 스크립트는 NVIDIA Jetson 용)"
 head -1 /etc/nv_tegra_release 2>/dev/null | sed 's/^/   /' || true
-python3 -c "import tensorrt" 2>/dev/null && ok "TensorRT $(python3 -c 'import tensorrt; print(tensorrt.__version__)')" \
-    || die "TensorRT 파이썬이 없습니다. JetPack 6.x 를 설치한 젯슨인지 확인하세요 (sudo apt install nvidia-jetpack)."
+if python3 -c "import tensorrt" 2>/dev/null; then
+    ok "TensorRT $(python3 -c 'import tensorrt; print(tensorrt.__version__)')"
+else
+    echo "   ❌ TensorRT 파이썬이 없습니다. JetPack 전체 구성이 설치되지 않은 젯슨입니다."
+    echo "      아래 명령으로 설치한 뒤(20~40분, 용량 수 GB) 이 스크립트를 다시 실행하세요:"
+    echo "        sudo apt update && sudo apt install -y nvidia-jetpack"
+    exit 1
+fi
 python3 -c "import cv2" 2>/dev/null && ok "OpenCV $(python3 -c 'import cv2; print(cv2.__version__)')" \
     || die "OpenCV(cv2) 가 없습니다. sudo apt install python3-opencv"
 [ -x /usr/src/tensorrt/bin/trtexec ] && ok "trtexec" || die "trtexec 가 없습니다 (/usr/src/tensorrt/bin/trtexec)."
@@ -45,14 +72,20 @@ python3 -c "import pycuda.driver" 2>/dev/null || need_apt="$need_apt python3-pyc
 python3 -c "import serial" 2>/dev/null || need_apt="$need_apt python3-serial"
 python3 -c "import requests" 2>/dev/null || need_apt="$need_apt python3-requests"
 if [ -n "$need_apt" ]; then
-    echo "   설치합니다:$need_apt   (비밀번호를 물어보면 젯슨 비밀번호를 입력하세요)"
-    sudo apt-get update -qq
-    sudo apt-get install -y $need_apt || true
+    echo "   설치합니다:$need_apt"
+    wait_apt || true
+    echo "   패키지 목록 받는 중… (인터넷 속도에 따라 1~5분)"
+    sudo apt-get update || warn "패키지 목록을 일부 못 받았습니다 (인터넷 연결 확인). 계속 진행합니다."
+    wait_apt || true
+    sudo apt-get install -y $need_apt || warn "일부 패키지 설치 실패 — 아래에서 다시 확인합니다."
 fi
 if ! python3 -c "import pycuda.driver" 2>/dev/null; then
-    echo "   apt 로 pycuda 를 못 받아 pip 로 설치합니다 (몇 분 걸림)"
+    echo "   apt 로 pycuda 를 못 받아 직접 빌드해 설치합니다 (5~15분 걸림, 멈춘 게 아닙니다)"
+    wait_apt || true
+    sudo apt-get install -y python3-dev build-essential || true
     export PATH="/usr/local/cuda/bin:$PATH"
-    python3 -m pip install --user pycuda || die "pycuda 설치 실패"
+    export CPATH="/usr/local/cuda/include:${CPATH}" LIBRARY_PATH="/usr/local/cuda/lib64:${LIBRARY_PATH}"
+    python3 -m pip install --user pycuda || die "pycuda 설치 실패 — 위 오류 메시지를 확인하세요"
 fi
 for m in numpy pycuda.driver serial requests; do
     python3 -c "import $m" 2>/dev/null && ok "$m" || die "$m 를 불러올 수 없습니다"
