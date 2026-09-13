@@ -305,6 +305,10 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(turntable_ops.rotate(req.get("deg", 0)))
                 elif path == "/turn/speed":
                     self._json(turntable_ops.set_speed(req.get("step_us", 2500)))
+                elif path == "/turn2":
+                    self._json(turntable_ops.rotate2(req.get("deg", 0)))
+                elif path == "/turn2/stop":
+                    self._json(turntable_ops.stop2())
                 elif path == "/turn/release":
                     self._json(turntable_ops.release())
                 elif path == "/turn/reset":

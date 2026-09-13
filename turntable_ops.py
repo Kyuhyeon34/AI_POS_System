@@ -15,7 +15,8 @@ import threading
 _lock = threading.Lock()
 _table = None
 _error = None
-_angle = 0.0            # 시작 자리에서 얼마나 돌아와 있나 (기록용)
+_angle = 0.0            # 1번(회전판): 시작 자리에서 얼마나 돌아와 있나 (기록용)
+_angle2 = 0.0           # 2번(좌우): 가운데에서 얼마나 치우쳐 있나
 
 
 def _connect():
@@ -45,6 +46,7 @@ def status():
         "connected": _table is not None,
         "port": getattr(_table, "port", None),
         "angle": round(_angle, 2),
+        "angle2": round(_angle2, 2),
         "error": _error,
     }
 
@@ -69,6 +71,29 @@ def rotate(deg):
         except Exception as e:
             _error = str(e)
             raise
+
+
+def rotate2(deg):
+    """2번(좌우) 모터. 보드가 바로 응답하므로 1번이 도는 동안에도 같이 움직인다."""
+    global _angle2, _error
+    with _lock:
+        try:
+            t = _connect()
+            t.rotate2(float(deg))
+            _angle2 += float(deg)
+            return {"angle2": round(_angle2, 2)}
+        except Exception as e:
+            _error = str(e)
+            raise
+
+
+def stop2():
+    """2번 모터를 멈춘다."""
+    with _lock:
+        if _table is None:
+            return {"stopped": False}
+        _table.stop2()
+        return {"stopped": True}
 
 
 def release():

@@ -161,6 +161,22 @@ class Turntable:
         """코일을 하나씩 켠다. ULN2003 의 LED 4개가 차례로 켜져야 한다."""
         return self._cmd("T")
 
+    def rotate2(self, deg):
+        """2번(좌우) 모터를 몇 도. 보드가 바로 응답하고 뒤에서 돌리므로
+        1번 모터 회전과 동시에 움직인다."""
+        return self._cmd(f"W{deg}")
+
+    def stop2(self):
+        """2번 모터를 멈추고 코일을 끈다."""
+        return self._cmd("X")
+
+    def busy2(self):
+        """2번 모터에 남은 스텝 수 (0 이면 멈춰 있다)."""
+        try:
+            return int(str(self._cmd("Y")).split()[-1])
+        except Exception:
+            return 0
+
     def release(self):
         """코일을 끈다. 멈춘 채로 켜 두면 모터가 뜨거워진다."""
         return self._cmd("Z")

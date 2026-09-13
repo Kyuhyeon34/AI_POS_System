@@ -1335,9 +1335,20 @@ class MainWindow(QMainWindow):
         self.span_spin.setSuffix(" 도")
         self.span_spin.setToolTip("왼쪽으로 이만큼 갔다가 오른쪽으로 이만큼 돌아옵니다.")
 
+        # 2번(좌우) 모터. 촬영 내내 가운데 → 왼쪽 → 오른쪽 → 가운데 로 한 번 훑는다.
+        self.span2_spin = QSpinBox()
+        self.span2_spin.setRange(0, 90)
+        self.span2_spin.setValue(20)
+        self.span2_spin.setSuffix(" 도")
+        self.span2_spin.setToolTip(
+            "촬영하는 동안 좌우 모터가 가운데 → 왼쪽 → 오른쪽 → 가운데 로 한 번 움직입니다.\n"
+            "회전판과 동시에 움직여서 같은 빵을 더 여러 각도로 담습니다.\n"
+            "0 으로 두면 좌우 모터는 움직이지 않습니다.")
+
         form.addRow("라벨 방식", self.auto_label_check)
         form.addRow("턴테이블", self.turn_check)
         form.addRow("왕복 각도 (±)", self.span_spin)
+        form.addRow("좌우 모터 (±)", self.span2_spin)
         right.addWidget(settings_group)
 
         # 화면에 빵이 여러 개일 때 — 모델이 아는 것은 자동으로 라벨이 붙고(초록),
@@ -2784,7 +2795,8 @@ class MainWindow(QMainWindow):
             # 턴테이블이 박자를 잡는다. 한 칸 돌고 → 한 장 찍고 → 다음 칸.
             # 타이머로 따로 찍으면 도는 중에 찍혀 흔들린 사진이 섞인다.
             span = float(self.span_spin.value())
-            self.turn_worker = TurntableWorker(self.target_count, span=span)
+            span2 = float(self.span2_spin.value())
+            self.turn_worker = TurntableWorker(self.target_count, span=span, span2=span2)
             self.turn_worker.arrived.connect(self.on_turntable_arrived)
             self.turn_worker.failed.connect(self.on_turntable_failed)
             self.turn_worker.done.connect(self.on_turntable_done)
@@ -2792,6 +2804,7 @@ class MainWindow(QMainWindow):
             self.collect_status.setText(
                 f"현재 상태: 자동 수집 중 (턴테이블)\n"
                 f"±{span:.0f}도 왕복, 한 칸 {step:.1f}도 x {self.target_count}장"
+                + (f"\n좌우 모터: 가운데 → 왼쪽 → 오른쪽 → 가운데 (±{span2:.0f}도)" if span2 > 0 else "")
             )
             self.turn_worker.start()
         else:

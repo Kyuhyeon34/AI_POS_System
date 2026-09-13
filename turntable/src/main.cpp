@@ -172,6 +172,18 @@ static void stepOnce(int8_t dir) {
     totalSteps += dir;
 }
 
+static void serviceMotor2();      // 아래에 정의 (2번 모터를 한 스텝 돌본다)
+
+// 1번 모터가 도는 동안 2번 모터가 멈추지 않게, 기다리는 시간을 잘게 쪼개
+// 그 틈에 2번 모터(버튼·W 명령)를 돌본다. 두 모터가 동시에 움직인다.
+static void waitUs(uint32_t us) {
+    uint32_t t0 = micros();
+    while ((uint32_t)(micros() - t0) < us) {
+        serviceMotor2();
+        delayMicroseconds(20);
+    }
+}
+
 static void stepBy(long n) {
     int8_t dir = (n >= 0) ? 1 : -1;
     long count = labs(n);
@@ -189,7 +201,7 @@ static void stepBy(long n) {
             uint32_t extra = RAMP_START_US - stepDelayUs;
             d += extra - (extra * (uint32_t)edge) / RAMP_STEPS;
         }
-        delayMicroseconds(d);
+        waitUs(d);
     }
     totalSteps += n;
     // 멈춰 있는 동안 코일을 켜 두면 모터가 뜨거워진다. 턴테이블은 유지 토크가 필요 없다.
@@ -234,12 +246,14 @@ struct ButtonMotor {
     bool moving;
     uint32_t lastUs;
     bool countSteps;          // 1번만 누적 스텝을 센다 (? 명령이 읽는 값)
+    long remain;              // 시리얼(W 명령)로 받은 남은 스텝. loop 가 조금씩 소화한다
+    int8_t autoDir;           // 그 방향
 };
 
 static ButtonMotor bm1 = {PINS,  order,  true, 0, BTN_LEFT,  BTN_RIGHT,
-                          &phase,  false, 0, true};
+                          &phase,  false, 0, true, 0, 0};
 static ButtonMotor bm2 = {PINS2, order2, MOTOR2_HALF, MOTOR2_DELAY_US,
-                          BTN2_LEFT, BTN2_RIGHT, &phase2, false, 0, false};
+                          BTN2_LEFT, BTN2_RIGHT, &phase2, false, 0, false, 0, 0};
 
 static bool handleButtonMotor(ButtonMotor &m) {
     bool left  = (digitalRead(m.btnL) == LOW);
@@ -252,6 +266,8 @@ static bool handleButtonMotor(ButtonMotor &m) {
         }
         return false;
     }
+
+    m.remain = 0;                 // 사람이 버튼을 누르면 자동 이동은 그만둔다
 
     // 1번 모터는 V 명령으로 속도가 바뀌므로 그때그때 읽는다.
     uint32_t want = m.delayUs ? m.delayUs : stepDelayUs;
@@ -270,9 +286,34 @@ static bool handleButtonMotor(ButtonMotor &m) {
     return true;
 }
 
+// W 명령으로 받은 만큼을 조금씩 돌린다. 버튼과 달리 목표를 정해 두고
+// loop 를 돌 때마다 한 스텝씩만 나가므로, 1번 모터가 도는 동안에도 같이 움직인다.
+static bool serviceAuto(ButtonMotor &m) {
+    if (m.remain <= 0) return false;
+    uint32_t want = m.delayUs ? m.delayUs : stepDelayUs;
+    uint32_t now = micros();
+    if (m.moving && (uint32_t)(now - m.lastUs) < want) return true;
+    m.lastUs = now;
+    m.moving = true;
+    uint8_t len = seqLenOf(m.half);
+    *m.phase = (int8_t)((*m.phase + m.autoDir + len) % len);
+    applyPhaseOn(m.pins, m.ord, m.half, *m.phase);
+    if (m.countSteps) totalSteps += m.autoDir;
+    if (--m.remain <= 0) {
+        releaseOn(m.pins);        // 다 갔으면 코일을 끈다 (켜 두면 뜨거워진다)
+        m.moving = false;
+    }
+    return true;
+}
+
+// 2번 모터 한 번 돌보기. 버튼이 우선이고, 없으면 자동 이동을 진행한다.
+static void serviceMotor2() {
+    if (!handleButtonMotor(bm2)) serviceAuto(bm2);
+}
+
 static void handleButtons() {
-    bool a = handleButtonMotor(bm1);
-    bool b = handleButtonMotor(bm2);
+    bool a = handleButtonMotor(bm1) || serviceAuto(bm1);
+    bool b = handleButtonMotor(bm2) || serviceAuto(bm2);
     digitalWrite(LED_BUILTIN, (a || b) ? HIGH : LOW);
 }
 
@@ -357,6 +398,21 @@ void loop() {
                 for (uint8_t i = 0; i < 4; i++) Serial.print(order[i] + 1);
                 Serial.print(' ');
                 Serial.println(halfStep ? "HALF" : "FULL");
+            } else if (cmd == 'W') {
+                // 2번(좌우) 모터를 몇 도. 바로 응답하고 뒤에서 조금씩 돈다
+                // → 1번 모터(R/S)와 동시에 움직일 수 있다.
+                float rev2 = MOTOR2_HALF ? REV_HALF : REV_FULL;
+                long n = lroundf(arg.toFloat() / 360.0f * rev2);
+                bm2.autoDir = (n >= 0) ? 1 : -1;
+                bm2.remain = labs(n);
+                Serial.print("OK "); Serial.println(bm2.remain);
+            } else if (cmd == 'X') {
+                bm2.remain = 0;
+                bm2.moving = false;
+                releaseOn(PINS2);
+                Serial.println("OK");
+            } else if (cmd == 'Y') {
+                Serial.print("OK "); Serial.println(bm2.remain);
             } else {
                 Serial.print("ERR 알 수 없는 명령: "); Serial.println(cmd);
             }

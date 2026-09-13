@@ -68,6 +68,13 @@ class RemoteTable:
     def rotate(self, deg):
         return self._post("/turn", {"deg": float(deg)})
 
+    def rotate2(self, deg):
+        """2번(좌우) 모터. 젯슨이 바로 응답하므로 1번이 도는 동안에도 같이 움직인다."""
+        return self._post("/turn2", {"deg": float(deg)})
+
+    def stop2(self):
+        return self._post("/turn2/stop", {})
+
     def close(self):
         try:
             self._post("/turn/release", {})
@@ -84,10 +91,13 @@ class TurntableWorker(QThread):
     MAX_STEP_DEG = 15.0              # 이보다 크면 고정한 박스를 놓치기 쉽다
     SHOT_WAIT = 3.0                  # 한 장 저장되기를 기다리는 최대 시간
 
-    def __init__(self, shots, span=180.0, settle=0.35, step_us=2500, parent=None):
+    def __init__(self, shots, span=180.0, settle=0.35, step_us=2500, span2=0.0, parent=None):
         super().__init__(parent)
         self.shots = max(1, int(shots))
         self.span = abs(float(span))
+        # 2번(좌우) 모터: 가운데 → 왼쪽 → 오른쪽 → 가운데. 0 이면 안 움직인다.
+        self.span2 = abs(float(span2))
+        self._side_ok = True
         self.settle = float(settle)
         self.step_us = int(step_us)
         self.table = None
@@ -98,6 +108,42 @@ class TurntableWorker(QThread):
         """한 장당 몇 도 돌 것인가. 왕복 한 바퀴(span x2)에 목표 장수를 나눈다."""
         per = (self.span * 2.0) / self.shots
         return max(self.MIN_STEP_DEG, min(self.MAX_STEP_DEG, per))
+
+    SIDE_MIN_DEG = 0.2               # 이보다 작은 이동은 보내지 않는다
+    MOTOR2_STEP_US = 1500            # 펌웨어의 2번 모터 스텝 간격 (되돌아올 시간 계산용)
+    MOTOR2_STEPS_PER_REV = 4076.0
+
+    def side_target(self, i):
+        """i 번째 장을 찍을 때 좌우 모터가 있어야 할 각도.
+
+        가운데(0) → 왼쪽(-span2) → 오른쪽(+span2) → 가운데(0) 로 한 번 훑는다.
+        촬영 내내 조금씩 움직이므로 같은 빵을 여러 각도에서 담게 된다.
+        """
+        if self.span2 <= 0 or self.shots < 2:
+            return 0.0
+        t = i / float(self.shots - 1)          # 0 ~ 1
+        if t <= 0.25:
+            return -self.span2 * (t / 0.25)                       # 가운데 → 왼쪽
+        if t <= 0.75:
+            return -self.span2 + 2.0 * self.span2 * ((t - 0.25) / 0.5)   # 왼쪽 → 오른쪽
+        return self.span2 * (1.0 - (t - 0.75) / 0.25)             # 오른쪽 → 가운데
+
+    def move_side(self, target, side):
+        """좌우 모터를 target 으로. 실패하면(옛 젯슨 서버) 조용히 끄고 계속 찍는다."""
+        if not self._side_ok or abs(target - side) < self.SIDE_MIN_DEG:
+            return side
+        try:
+            self.table.rotate2(target - side)
+            return target
+        except Exception as e:
+            self._side_ok = False
+            print(f"[턴테이블] 좌우 모터를 쓸 수 없어 끕니다: {e}")
+            return side
+
+    def side_wait(self, deg):
+        """좌우 모터가 그만큼 가는 데 걸리는 시간 (뒤에서 돌기 때문에 기다려 준다)."""
+        steps = abs(deg) / 360.0 * self.MOTOR2_STEPS_PER_REV
+        return min(20.0, steps * self.MOTOR2_STEP_US / 1e6)
 
     def shot_done(self):
         """GUI 스레드가 한 장 저장했다고 알려 준다."""
@@ -124,11 +170,14 @@ class TurntableWorker(QThread):
 
         step = self.step_deg()
         angle = 0.0
+        side = 0.0
         direction = 1
         try:
-            for _ in range(self.shots):
+            for i in range(self.shots):
                 if self._stop.is_set():
                     break
+                # 좌우 모터를 먼저 보낸다. 보드가 바로 응답하므로 아래 회전과 동시에 움직인다.
+                side = self.move_side(self.side_target(i), side)
                 # 끝까지 갔으면 방향을 바꾼다. 케이블이 감기지 않게.
                 if abs(angle + step * direction) > self.span:
                     direction = -direction
@@ -144,6 +193,9 @@ class TurntableWorker(QThread):
                 self._shot.wait(self.SHOT_WAIT)
 
             # 제자리로 돌려 놓는다. 다음 수집이 같은 자리에서 시작하도록.
+            if abs(side) > 0.01:
+                self.move_side(0.0, side)
+                time.sleep(self.side_wait(side))     # 좌우 모터가 가운데로 갈 시간
             if abs(angle) > 0.01:
                 self.table.rotate(-angle)
         except Exception as e:
