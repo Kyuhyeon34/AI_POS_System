@@ -11,6 +11,7 @@ PC 의 요청을 받아 여기서 실제로 돌린다.
 PC 쪽 gui/turntable_worker.py 가 이 창구를 쓴다.
 """
 import threading
+import time
 
 _lock = threading.Lock()
 _table = None
@@ -60,17 +61,29 @@ def set_speed(usec):
 
 
 def rotate(deg):
-    """각도만큼 돌리고, 다 돌면 돌아온다."""
+    """회전판을 각도만큼 돌리고, 다 돌면 돌아온다.
+
+    도는 동안 시리얼 락을 계속 잡고 있으면 그 사이 좌우 모터 명령이 밀린다
+    (하나가 움직이면 다른 하나가 멈춘 것처럼 보인다).
+    그래서 보드에 "돌기 시작해라"만 시키고 락을 놓은 뒤, 가끔 남은 양만 확인한다.
+    두 모터가 완전히 독립적으로 움직인다.
+    """
     global _angle, _error
-    with _lock:
-        try:
+    try:
+        with _lock:
             t = _connect()
-            t.rotate(float(deg))
-            _angle += float(deg)
-            return {"angle": round(_angle, 2)}
-        except Exception as e:
-            _error = str(e)
-            raise
+            t.rotate_async(float(deg))
+        limit = time.time() + abs(float(deg)) / 360.0 * 4076 * (t.step_us / 1e6) * 3 + 30
+        while time.time() < limit:
+            time.sleep(0.05)
+            with _lock:
+                if t.busy1() == 0:
+                    break
+        _angle += float(deg)
+        return {"angle": round(_angle, 2)}
+    except Exception as e:
+        _error = str(e)
+        raise
 
 
 def rotate2(deg):
@@ -85,6 +98,89 @@ def rotate2(deg):
         except Exception as e:
             _error = str(e)
             raise
+
+
+def set_speed2(usec):
+    """2번 모터 속도. 간격이 클수록 느리고 힘이 세다."""
+    with _lock:
+        t = _connect()
+        t.set_speed2(int(usec))
+        return {"step_us2": int(usec)}
+
+
+def set_mode2(half):
+    """2번 모터 방식. half=False 면 FULL (힘이 세다)."""
+    with _lock:
+        t = _connect()
+        t.set_mode2(bool(half))
+        return {"half2": bool(half)}
+
+
+def set_order2(order):
+    """2번 모터 코일 순서 (예: "1324")."""
+    with _lock:
+        t = _connect()
+        t.set_order2(str(order))
+        return {"order2": str(order)}
+
+
+def set_hold2(hold):
+    """멈춘 뒤에도 2번 모터가 자리를 붙잡게 할지."""
+    with _lock:
+        t = _connect()
+        t.set_hold2(bool(hold))
+        return {"hold2": bool(hold)}
+
+
+def test_coils2():
+    """코일을 하나씩 켠다. 드라이버 LED 4개가 차례로 켜지면 배선 정상."""
+    with _lock:
+        t = _connect()
+        t.test_coils2()
+        return {"tested": True}
+
+
+def rotate_start(deg):
+    """회전판을 돌리기 시작하고 바로 돌아온다 (연속 이동용)."""
+    global _angle
+    with _lock:
+        t = _connect()
+        t.rotate_async(float(deg))
+        _angle += float(deg)
+        return {"angle": round(_angle, 2)}
+
+
+def positions():
+    """보드가 센 실제 위치(도). 명령이 중간에 멈춰도 정확하다."""
+    with _lock:
+        t = _connect()
+        p = t.positions()
+        return {"turn": round(p["turn"], 2), "side": round(p["side"], 2),
+                "rev": p.get("rev", 4076.0), "rev2": p.get("rev2", 4076.0)}
+
+
+def reset_positions():
+    """지금 자리를 0 도로 삼는다."""
+    with _lock:
+        t = _connect()
+        t.reset_positions()
+        return {"turn": 0.0, "side": 0.0}
+
+
+def remaining():
+    """두 모터에 남은 스텝 수. 0 이면 멈춰 있다."""
+    with _lock:
+        t = _connect()
+        return {"turn": t.busy1(), "side": t.busy2()}
+
+
+def stop1():
+    """회전판을 멈춘다."""
+    with _lock:
+        if _table is None:
+            return {"stopped": False}
+        _table.stop1()
+        return {"stopped": True}
 
 
 def stop2():

@@ -68,6 +68,22 @@ class RemoteTable:
     def rotate(self, deg):
         return self._post("/turn", {"deg": float(deg)})
 
+    def rotate_async(self, deg):
+        """회전판을 돌리기 시작하고 바로 돌아온다 (연속 이동용)."""
+        return self._post("/turn/start", {"deg": float(deg)})
+
+    def remaining(self):
+        return self._post("/turn/remaining", {})
+
+    def positions(self):
+        return self._post("/turn/position", {})
+
+    def stop1(self):
+        return self._post("/turn/stop", {})
+
+    def set_speed2(self, usec):
+        return self._post("/turn2/speed", {"step_us": int(usec)})
+
     def rotate2(self, deg):
         """2번(좌우) 모터. 젯슨이 바로 응답하므로 1번이 도는 동안에도 같이 움직인다."""
         return self._post("/turn2", {"deg": float(deg)})
@@ -91,12 +107,15 @@ class TurntableWorker(QThread):
     MAX_STEP_DEG = 15.0              # 이보다 크면 고정한 박스를 놓치기 쉽다
     SHOT_WAIT = 3.0                  # 한 장 저장되기를 기다리는 최대 시간
 
-    def __init__(self, shots, span=180.0, settle=0.35, step_us=2500, span2=0.0, parent=None):
+    def __init__(self, shots, span=180.0, settle=0.35, step_us=2500, span2=0.0,
+                 interval=0.5, smooth=True, parent=None):
         super().__init__(parent)
         self.shots = max(1, int(shots))
         self.span = abs(float(span))
         # 2번(좌우) 모터: 가운데 → 왼쪽 → 오른쪽 → 가운데. 0 이면 안 움직인다.
         self.span2 = abs(float(span2))
+        self.interval = max(0.1, float(interval))
+        self.smooth = bool(smooth)
         self._side_ok = True
         self.settle = float(settle)
         self.step_us = int(step_us)
@@ -145,6 +164,152 @@ class TurntableWorker(QThread):
         steps = abs(deg) / 360.0 * self.MOTOR2_STEPS_PER_REV
         return min(20.0, steps * self.MOTOR2_STEP_US / 1e6)
 
+    MIN_STEP_US = 900                # 회전판이 따라올 수 있는 한계
+    MIN_STEP_US2 = 2000              # 좌우 모터 한계 (풀스텝 약 15 RPM). 더 빠르면 미끄러진다
+    MAX_STEP_US = 300000             # 펌웨어가 허용하는 가장 느린 간격
+
+    def legs(self, span, total_sec):
+        """가운데 → 왼쪽 → 오른쪽 → 가운데. (각도, 걸릴 시간) 세 구간."""
+        if span <= 0:
+            return []
+        return [(-span, total_sec * 0.25), (2 * span, total_sec * 0.5), (-span, total_sec * 0.25)]
+
+    def leg_speed(self, deg, seconds, rev=None, floor=None):
+        """그 구간을 그 시간에 걸쳐 도는 스텝 간격(us). 느릴수록 부드럽다.
+
+        모터가 따라올 수 없을 만큼 빨라야 하는 경우에는 한계 속도로 돌린다.
+        (그러면 촬영이 끝날 때까지 왕복을 다 못 돌고, 남은 만큼은 제자리로 돌아온다)
+        """
+        steps = max(1.0, abs(deg) / 360.0 * float(rev or self.MOTOR2_STEPS_PER_REV))
+        low = self.MIN_STEP_US if floor is None else floor
+        return int(min(self.MAX_STEP_US, max(low, seconds / steps * 1e6)))
+
+    def run_smooth(self):
+        """끊김 없이: 두 모터를 아주 느리게 계속 돌려 두고 그 위에서 사진만 찍는다.
+
+        한 장마다 돌고 멈추면 화면이 뚝뚝 끊긴다. 촬영 시간 전체(장수 x 간격)에
+        걸쳐 한 번 왕복하도록 속도를 맞추면 계속 흐르는 것처럼 보이고,
+        사진 한 장(1/30초) 사이의 움직임은 0.1도쯤이라 흔들리지도 않는다.
+
+        세 구간(가운데→왼쪽→오른쪽→가운데)은 속도가 모두 같으므로 속도는 처음에
+        한 번만 정한다. 구간을 넘길 때는 시계가 아니라 "모터가 다 갔는지"를 보고
+        곧바로 다음 구간을 보낸다. 그래야 방향을 바꾸는 순간 말고는 멈추지 않는다.
+        """
+        total = max(1.0, self.shots * self.interval)
+        legs1, legs2 = self.legs(self.span, total), self.legs(self.span2, total)
+        rev1 = rev2 = self.MOTOR2_STEPS_PER_REV
+        try:
+            here = self.table.positions()
+            start1, start2 = here.get("turn", 0.0), here.get("side", 0.0)
+            rev1, rev2 = here.get("rev", rev1), here.get("rev2", rev2)
+        except Exception:
+            start1 = start2 = 0.0
+
+        # 속도는 한 번만 (세 구간 모두 같은 속도라 다시 보낼 필요가 없다)
+        if legs1:
+            self.table.set_speed(self.leg_speed(*legs1[0], rev=rev1))
+        if legs2 and self._side_ok:
+            try:
+                self.table.set_speed2(self.leg_speed(*legs2[0], rev=rev2, floor=self.MIN_STEP_US2))
+            except Exception as e:
+                self._side_ok = False
+                print(f"[턴테이블] 좌우 모터를 쓸 수 없어 끕니다: {e}")
+
+        def send(idx1, idx2):
+            """각 모터의 다음 구간을 보낸다."""
+            if legs1 and idx1 < len(legs1):
+                self.table.rotate_async(legs1[idx1][0])
+            if legs2 and self._side_ok and idx2 < len(legs2):
+                try:
+                    self.table.rotate2(legs2[idx2][0])
+                except Exception as e:
+                    self._side_ok = False
+                    print(f"[턴테이블] 좌우 모터를 쓸 수 없어 끕니다: {e}")
+
+        i1, i2 = [0], [0]                  # 지금 몇 번째 구간인지 (뒤 스레드와 같이 본다)
+        busy = threading.Event()
+        finishing = threading.Event()      # 정리 시작 — 더 이상 다음 구간을 보내지 않는다
+
+        def advance():
+            """모터가 다 갔으면 다음 구간을 보낸다. 촬영을 막지 않으려고 따로 돈다."""
+            try:
+                if finishing.is_set():
+                    return
+                rem = self.table.remaining()
+                if finishing.is_set():
+                    return
+                if rem.get("turn", 1) == 0 and i1[0] + 1 < len(legs1):
+                    i1[0] += 1
+                    self.table.rotate_async(legs1[i1[0]][0])
+                if rem.get("side", 1) == 0 and self._side_ok and i2[0] + 1 < len(legs2):
+                    i2[0] += 1
+                    self.table.rotate2(legs2[i2[0]][0])
+            except Exception as e:
+                print(f"[턴테이블] 다음 구간을 보내지 못했습니다: {e}")
+            finally:
+                busy.clear()
+
+        send(i1[0], i2[0])
+        t0 = time.time()                       # 첫 명령을 보낸 뒤부터 촬영 시계 시작
+        for i in range(self.shots):
+            if self._stop.is_set():
+                break
+            target = t0 + i * self.interval
+            if time.time() > target + self.interval:      # 많이 밀렸으면 일정을 다시 맞춘다
+                t0 = time.time() - i * self.interval      # (몰아서 찍지 않게)
+                target = time.time()
+            while not self._stop.is_set():
+                left = target - time.time()
+                if left <= 0:
+                    break
+                time.sleep(min(0.05, left))
+            self._shot.clear()
+            self.arrived.emit(float(i))
+            self._shot.wait(self.SHOT_WAIT)
+
+            # 다 간 모터가 있으면 곧바로 다음 구간으로.
+            # 이 확인·전송은 시리얼 왕복이라 0.5초쯤 걸린다. 촬영 루프에서 직접 하면
+            # 그만큼 사진이 밀리므로, 뒤에서 따로 돌린다 (촬영은 제 박자를 지킨다).
+            if not busy.is_set() and (i1[0] + 1 < len(legs1)
+                                      or (self._side_ok and i2[0] + 1 < len(legs2))):
+                busy.set()
+                threading.Thread(target=advance, daemon=True).start()
+        # 뒤에서 도는 스레드가 구간을 하나 더 보내 버리면 제자리로 못 돌아온다.
+        finishing.set()
+        for _ in range(60):
+            if not busy.is_set():
+                break
+            time.sleep(0.05)
+        self.park(start1, start2)
+
+    def park(self, start1=0.0, start2=0.0):
+        """멈추고 처음 자리로 돌려 놓는다.
+
+        보드가 실제로 걸은 걸음 수를 세고 있으므로, 중간에 멈춰도 위치가 정확하다.
+        """
+        for stop in ("stop1", "stop2"):
+            try:
+                getattr(self.table, stop)()
+            except Exception:
+                pass
+        try:
+            now = self.table.positions()
+        except Exception:
+            return
+        here1 = now.get("turn", 0.0) - start1
+        here2 = now.get("side", 0.0) - start2
+        try:
+            self.table.set_speed(self.step_us)
+            if abs(here2) > 0.2 and self._side_ok:
+                self.table.set_speed2(2500)
+                self.table.rotate2(-here2)
+            if abs(here1) > 0.2:
+                self.table.rotate(-here1)              # 다 돌아올 때까지 기다린다
+            if abs(here2) > 0.2 and self._side_ok:
+                time.sleep(self.side_wait(here2))
+        except Exception as e:
+            print(f"[턴테이블] 제자리로 돌리지 못했습니다: {e}")
+
     def shot_done(self):
         """GUI 스레드가 한 장 저장했다고 알려 준다."""
         self._shot.set()
@@ -166,6 +331,19 @@ class TurntableWorker(QThread):
         except Exception as e:
             self.failed.emit(str(e))
             self.done.emit()
+            return
+
+        if self.smooth:
+            try:
+                self.run_smooth()
+            except Exception as e:
+                self.failed.emit(str(e))
+            finally:
+                try:
+                    self.table.close()
+                except Exception:
+                    pass
+                self.done.emit()
             return
 
         step = self.step_deg()

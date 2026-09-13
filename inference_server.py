@@ -303,10 +303,30 @@ class Handler(BaseHTTPRequestHandler):
                 req = json.loads(body.decode("utf-8")) if body else {}
                 if path == "/turn":
                     self._json(turntable_ops.rotate(req.get("deg", 0)))
+                elif path == "/turn/start":
+                    self._json(turntable_ops.rotate_start(req.get("deg", 0)))
+                elif path == "/turn/stop":
+                    self._json(turntable_ops.stop1())
+                elif path == "/turn/position":
+                    self._json(turntable_ops.positions())
+                elif path == "/turn/position/reset":
+                    self._json(turntable_ops.reset_positions())
+                elif path == "/turn/remaining":
+                    self._json(turntable_ops.remaining())
                 elif path == "/turn/speed":
                     self._json(turntable_ops.set_speed(req.get("step_us", 2500)))
                 elif path == "/turn2":
                     self._json(turntable_ops.rotate2(req.get("deg", 0)))
+                elif path == "/turn2/speed":
+                    self._json(turntable_ops.set_speed2(req.get("step_us", 2500)))
+                elif path == "/turn2/hold":
+                    self._json(turntable_ops.set_hold2(req.get("hold", False)))
+                elif path == "/turn2/mode":
+                    self._json(turntable_ops.set_mode2(req.get("half", True)))
+                elif path == "/turn2/order":
+                    self._json(turntable_ops.set_order2(req.get("order", "1234")))
+                elif path == "/turn2/test":
+                    self._json(turntable_ops.test_coils2())
                 elif path == "/turn2/stop":
                     self._json(turntable_ops.stop2())
                 elif path == "/turn/release":

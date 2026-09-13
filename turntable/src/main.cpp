@@ -77,8 +77,14 @@ static const uint8_t BTN2_RIGHT = A1;
 static uint8_t order2[4] = {0, 1, 2, 3};
 
 // 2번은 하프스텝 고정. 1번의 M0/M1 에 영향받지 않는다.
+static bool half2 = false;         // 2번 모터 방식 (N 명령). 기본 FULL — 코일 2개를 동시에
+                                   // 켜서 힘이 세다 (LED 2개가 늘 켜져 보인다).
+                                   // HALF 는 부드럽지만 코일 1개만 켜지는 구간이 있어 약하다.
+static bool hold2 = false;         // 멈춘 뒤에도 코일을 켜 둘까 (H 명령).
+                                   // 켜 두면 자리를 붙잡지만 모터가 뜨거워진다.
 static const bool MOTOR2_HALF = true;
-static const uint32_t MOTOR2_DELAY_US = 1500;   // 1번 기본값과 같은 속도
+static uint32_t delay2Us = 2500;   // 2번 모터 스텝 간격 (U 명령). 느릴수록 힘이 세다
+static const uint32_t MOTOR2_DELAY_US = 1500;   // (옛 기본값)
 
 static int8_t phase2 = 0;
 
@@ -132,7 +138,8 @@ static const uint32_t RAMP_START_US = 9000;    // 출발 간격
 static const uint16_t RAMP_STEPS = 60;         // 몇 스텝에 걸쳐 붙일지
 
 static int8_t phase = 0;        // 코일을 껐다 켜도 이어지도록 위상을 기억
-static long totalSteps = 0;     // 누적 (밀림 확인용)
+static long totalSteps = 0;     // 1번 누적 (밀림 확인용)
+static long totalSteps2 = 0;    // 2번 누적 — 촬영이 끝나고 정확히 제자리로 돌아가려면 필요하다
 
 // 어느 모터인지 인자로 받는다. 1번과 2번이 같은 코드를 쓴다.
 static void applyPhaseOn(const uint8_t *pins, const uint8_t *ord,
@@ -248,28 +255,39 @@ struct ButtonMotor {
     bool countSteps;          // 1번만 누적 스텝을 센다 (? 명령이 읽는 값)
     long remain;              // 시리얼(W 명령)로 받은 남은 스텝. loop 가 조금씩 소화한다
     int8_t autoDir;           // 그 방향
+    long total;               // 이번 이동의 전체 스텝 수 (출발·도착을 느리게 하려고)
 };
 
 static ButtonMotor bm1 = {PINS,  order,  true, 0, BTN_LEFT,  BTN_RIGHT,
-                          &phase,  false, 0, true, 0, 0};
-static ButtonMotor bm2 = {PINS2, order2, MOTOR2_HALF, MOTOR2_DELAY_US,
-                          BTN2_LEFT, BTN2_RIGHT, &phase2, false, 0, false, 0, 0};
+                          &phase,  false, 0, true, 0, 0, 0};
+static ButtonMotor bm2 = {PINS2, order2, false, 2500,
+                          BTN2_LEFT, BTN2_RIGHT, &phase2, false, 0, false, 0, 0, 0};
 
 static bool handleButtonMotor(ButtonMotor &m) {
     bool left  = (digitalRead(m.btnL) == LOW);
     bool right = (digitalRead(m.btnR) == LOW);
 
-    if (left == right) {              // 둘 다 눌렸거나 둘 다 안 눌렸으면 멈춘다
-        if (m.moving) {
-            releaseOn(m.pins);        // 멈춰 있는 동안 코일을 켜 두면 뜨거워진다
-            m.moving = false;
+    // 자동 이동(W·D 명령)은 "버튼을 대신 눌러 주는" 것으로 처리한다.
+    // 사람이 버튼으로 돌릴 때와 완전히 같은 코드·같은 속도로 돌게 하려는 것이다.
+    // 버튼을 실제로 누르면 그쪽이 우선이고 자동 이동은 취소된다.
+    bool autoMove = false;
+    if (left == right) {
+        if (m.remain > 0) {
+            autoMove = true;
+            left  = (m.autoDir < 0);
+            right = (m.autoDir > 0);
+        } else {
+            if (m.moving) {
+                bool keepOn = (!m.countSteps) && hold2;   // 2번 모터만 붙잡아 둘 수 있다
+                if (!keepOn) releaseOn(m.pins);           // 켜 둔 채로 두면 뜨거워진다
+                m.moving = false;
+            }
+            return false;
         }
-        return false;
+    } else {
+        m.remain = 0;                 // 사람이 버튼을 누르면 자동 이동은 그만둔다
     }
 
-    m.remain = 0;                 // 사람이 버튼을 누르면 자동 이동은 그만둔다
-
-    // 1번 모터는 V 명령으로 속도가 바뀌므로 그때그때 읽는다.
     uint32_t want = m.delayUs ? m.delayUs : stepDelayUs;
     uint32_t now = micros();
     if (m.moving && (uint32_t)(now - m.lastUs) < want) {
@@ -283,37 +301,24 @@ static bool handleButtonMotor(ButtonMotor &m) {
     *m.phase = (int8_t)((*m.phase + dir + len) % len);
     applyPhaseOn(m.pins, m.ord, m.half, *m.phase);
     if (m.countSteps) totalSteps += dir;
-    return true;
-}
+    else totalSteps2 += dir;
 
-// W 명령으로 받은 만큼을 조금씩 돌린다. 버튼과 달리 목표를 정해 두고
-// loop 를 돌 때마다 한 스텝씩만 나가므로, 1번 모터가 도는 동안에도 같이 움직인다.
-static bool serviceAuto(ButtonMotor &m) {
-    if (m.remain <= 0) return false;
-    uint32_t want = m.delayUs ? m.delayUs : stepDelayUs;
-    uint32_t now = micros();
-    if (m.moving && (uint32_t)(now - m.lastUs) < want) return true;
-    m.lastUs = now;
-    m.moving = true;
-    uint8_t len = seqLenOf(m.half);
-    *m.phase = (int8_t)((*m.phase + m.autoDir + len) % len);
-    applyPhaseOn(m.pins, m.ord, m.half, *m.phase);
-    if (m.countSteps) totalSteps += m.autoDir;
-    if (--m.remain <= 0) {
-        releaseOn(m.pins);        // 다 갔으면 코일을 끈다 (켜 두면 뜨거워진다)
+    if (autoMove && --m.remain <= 0) {
+        bool keepOn = (!m.countSteps) && hold2;
+        if (!keepOn) releaseOn(m.pins);
         m.moving = false;
     }
     return true;
 }
 
-// 2번 모터 한 번 돌보기. 버튼이 우선이고, 없으면 자동 이동을 진행한다.
+// 2번 모터 한 번 돌보기 (1번 모터가 도는 동안에도 불린다)
 static void serviceMotor2() {
-    if (!handleButtonMotor(bm2)) serviceAuto(bm2);
+    handleButtonMotor(bm2);
 }
 
 static void handleButtons() {
-    bool a = handleButtonMotor(bm1) || serviceAuto(bm1);
-    bool b = handleButtonMotor(bm2) || serviceAuto(bm2);
+    bool a = handleButtonMotor(bm1);
+    bool b = handleButtonMotor(bm2);
     digitalWrite(LED_BUILTIN, (a || b) ? HIGH : LOW);
 }
 
@@ -342,9 +347,10 @@ void loop() {
                 Serial.println("OK");
             } else if (cmd == 'V') {
                 long v = arg.toInt();
-                if (v < 800 || v > 40000) {
-                    // 800us 아래는 탈조가 나고, 40ms 위는 쓸 이유가 없다
-                    Serial.println("ERR 간격은 800~40000us");
+                if (v < 800 || v > 300000) {
+                    // 800us 아래는 탈조가 난다. 위쪽은 "촬영 내내 아주 천천히"
+                    // 연속으로 돌릴 때 필요해서 0.3초까지 열어 둔다.
+                    Serial.println("ERR 간격은 800~300000us");
                 } else {
                     stepDelayUs = (uint32_t)v;
                     Serial.print("OK "); Serial.println(stepDelayUs);
@@ -398,21 +404,93 @@ void loop() {
                 for (uint8_t i = 0; i < 4; i++) Serial.print(order[i] + 1);
                 Serial.print(' ');
                 Serial.println(halfStep ? "HALF" : "FULL");
+            } else if (cmd == 'D') {
+                // 회전판(1번)을 몇 도 — 바로 응답하고 뒤에서 조금씩 돈다.
+                // R 은 다 돌 때까지 기다리지만, D 는 기다리지 않으므로
+                // 그동안 좌우 모터 명령도 따로 받을 수 있다 (완전 독립).
+                long n = lroundf(arg.toFloat() / 360.0f * stepsPerRev());
+                bm1.autoDir = (n >= 0) ? 1 : -1;
+                bm1.remain = labs(n);
+                bm1.total = bm1.remain;
+                Serial.print("OK "); Serial.println(bm1.remain);
             } else if (cmd == 'W') {
                 // 2번(좌우) 모터를 몇 도. 바로 응답하고 뒤에서 조금씩 돈다
                 // → 1번 모터(R/S)와 동시에 움직일 수 있다.
-                float rev2 = MOTOR2_HALF ? REV_HALF : REV_FULL;
+                float rev2 = half2 ? REV_HALF : REV_FULL;
                 long n = lroundf(arg.toFloat() / 360.0f * rev2);
                 bm2.autoDir = (n >= 0) ? 1 : -1;
                 bm2.remain = labs(n);
+                bm2.total = bm2.remain;
                 Serial.print("OK "); Serial.println(bm2.remain);
-            } else if (cmd == 'X') {
-                bm2.remain = 0;
-                bm2.moving = false;
+            } else if (cmd == 'U') {
+                // 2번 모터 스텝 간격(us). 느릴수록 힘이 세다 (기본 2500)
+                long v = arg.toInt();
+                if (v < 800 || v > 300000) {
+                    Serial.println("ERR 간격은 800~300000us");
+                } else {
+                    delay2Us = (uint32_t)v; bm2.delayUs = delay2Us;
+                    Serial.print("OK "); Serial.println(delay2Us);
+                }
+            } else if (cmd == 'N') {
+                // N0 = FULL(힘 셈), N1 = HALF(부드러움). 2번 모터만
+                half2 = (arg.toInt() != 0); bm2.half = half2;
+                releaseOn(PINS2); phase2 = 0;
+                Serial.print("OK "); Serial.println(half2 ? "HALF" : "FULL");
+            } else if (cmd == 'Q') {
+                // 2번 모터 코일 순서 (예: Q1324).
+                // 배선 순서가 다르면 제자리에서 떨기만 하고 돌지 않는다.
+                bool good = (arg.length() == 4);
+                bool seen[4] = {false, false, false, false};
+                uint8_t tmp[4];
+                for (uint8_t i = 0; good && i < 4; i++) {
+                    int v = arg[i] - '1';
+                    if (v < 0 || v > 3 || seen[v]) { good = false; break; }
+                    seen[v] = true;
+                    tmp[i] = (uint8_t)v;
+                }
+                if (!good) {
+                    Serial.println("ERR 1~4 를 한 번씩 쓴 네 자리로 (예: Q1324)");
+                } else {
+                    for (uint8_t i = 0; i < 4; i++) order2[i] = tmp[i];
+                    releaseOn(PINS2);
+                    phase2 = 0;
+                    Serial.print("OK "); Serial.println(arg);
+                }
+            } else if (cmd == 'H') {
+                // H1 = 멈춘 뒤에도 2번 모터 코일을 켜 둔다 (자리를 붙잡음, 뜨거워짐)
+                hold2 = (arg.toInt() != 0);
+                if (!hold2) releaseOn(PINS2);
+                Serial.print("OK "); Serial.println(hold2 ? "HOLD" : "FREE");
+            } else if (cmd == 'G') {
+                // 2번 모터 코일 점검: 드라이버 LED 4개가 차례로 켜져야 한다
+                for (uint8_t i = 0; i < 4; i++) {
+                    for (uint8_t j = 0; j < 4; j++)
+                        digitalWrite(PINS2[j], (i == j) ? HIGH : LOW);
+                    delay(700);
+                }
                 releaseOn(PINS2);
                 Serial.println("OK");
+            } else if (cmd == 'X') {
+                // X1 = 회전판 멈춤, X(또는 X2) = 좌우 모터 멈춤
+                if (arg.toInt() == 1) {
+                    bm1.remain = 0; bm1.moving = false; release();
+                } else {
+                    bm2.remain = 0; bm2.moving = false; releaseOn(PINS2);
+                }
+                Serial.println("OK");
+            } else if (cmd == 'K') {
+                // 두 모터가 출발점에서 몇 스텝 가 있는지 (제자리로 돌릴 때 쓴다)
+                // K0 을 보내면 지금 자리를 0 으로 삼는다 (버튼으로 얼마나 돌렸는지 잴 때)
+                if (arg.length() && arg[0] == '0') { totalSteps = 0; totalSteps2 = 0; }
+                Serial.print("OK ");
+                Serial.print(totalSteps); Serial.print(' ');
+                Serial.print(totalSteps2); Serial.print(' ');
+                Serial.print((long)stepsPerRev()); Serial.print(' ');
+                Serial.println((long)(half2 ? REV_HALF : REV_FULL));
             } else if (cmd == 'Y') {
-                Serial.print("OK "); Serial.println(bm2.remain);
+                // Y1 = 회전판에 남은 스텝, Y(또는 Y2) = 좌우 모터
+                long v = (arg.toInt() == 1) ? bm1.remain : bm2.remain;
+                Serial.print("OK "); Serial.println(v);
             } else {
                 Serial.print("ERR 알 수 없는 명령: "); Serial.println(cmd);
             }

@@ -1337,11 +1337,12 @@ class MainWindow(QMainWindow):
 
         # 2번(좌우) 모터. 촬영 내내 가운데 → 왼쪽 → 오른쪽 → 가운데 로 한 번 훑는다.
         self.span2_spin = QSpinBox()
-        self.span2_spin.setRange(0, 90)
-        self.span2_spin.setValue(20)
+        self.span2_spin.setRange(0, 720)      # 한 바퀴가 넘는 왕복도 쓴다 (실측: ±400도)
+        self.span2_spin.setValue(400)
         self.span2_spin.setSuffix(" 도")
         self.span2_spin.setToolTip(
             "촬영하는 동안 좌우 모터가 가운데 → 왼쪽 → 오른쪽 → 가운데 로 한 번 움직입니다.\n"
+            "이 장비에서는 400도가 끝에서 끝까지입니다.\n"
             "회전판과 동시에 움직여서 같은 빵을 더 여러 각도로 담습니다.\n"
             "0 으로 두면 좌우 모터는 움직이지 않습니다.")
 
@@ -1349,6 +1350,12 @@ class MainWindow(QMainWindow):
         form.addRow("턴테이블", self.turn_check)
         form.addRow("왕복 각도 (±)", self.span_spin)
         form.addRow("좌우 모터 (±)", self.span2_spin)
+        self.smooth_check = QCheckBox("끊김 없이 계속 움직이기")
+        self.smooth_check.setChecked(True)
+        self.smooth_check.setToolTip(
+            "촬영 시간 내내 두 모터가 아주 느리게 계속 움직입니다 (권장).\n"
+            "끄면 한 장 찍을 때마다 조금 움직였다 멈추는 예전 방식으로 돕니다.")
+        form.addRow("움직임", self.smooth_check)
         right.addWidget(settings_group)
 
         # 화면에 빵이 여러 개일 때 — 모델이 아는 것은 자동으로 라벨이 붙고(초록),
@@ -2777,6 +2784,17 @@ class MainWindow(QMainWindow):
             msg += "\n\n지우지 못한 것:\n" + "\n".join(failed[:5])
         QMessageBox.information(self, "삭제 완료", msg)
 
+    def side_sweep_note(self, span2):
+        """좌우 왕복(가운데→왼쪽→오른쪽→가운데)이 촬영 시간 안에 끝나는지 알려 준다."""
+        if span2 <= 0 or not self.smooth_check.isChecked():
+            return ""
+        need = 4.0 * span2 / 360.0 * 2038 * 0.002          # 좌우 모터가 낼 수 있는 최고 속도 기준
+        have = self.target_count * float(self.interval_spin.value())
+        if need <= have:
+            return ""
+        return (f"\n⚠ 좌우 ±{span2:.0f}도 왕복에 최소 {need:.0f}초가 필요한데 촬영은 {have:.0f}초입니다.\n"
+                f"   장수를 {int(need / max(0.1, float(self.interval_spin.value()))) + 1}장 이상으로 늘리거나 각도를 줄이세요.")
+
     def start_collection(self):
         if self.frame is None:
             QMessageBox.warning(self, "카메라 필요", "먼저 「수집용 카메라 켜기」를 눌러주세요.")
@@ -2796,7 +2814,10 @@ class MainWindow(QMainWindow):
             # 타이머로 따로 찍으면 도는 중에 찍혀 흔들린 사진이 섞인다.
             span = float(self.span_spin.value())
             span2 = float(self.span2_spin.value())
-            self.turn_worker = TurntableWorker(self.target_count, span=span, span2=span2)
+            self.turn_worker = TurntableWorker(
+                self.target_count, span=span, span2=span2,
+                interval=float(self.interval_spin.value()),
+                smooth=self.smooth_check.isChecked())
             self.turn_worker.arrived.connect(self.on_turntable_arrived)
             self.turn_worker.failed.connect(self.on_turntable_failed)
             self.turn_worker.done.connect(self.on_turntable_done)
@@ -2805,6 +2826,8 @@ class MainWindow(QMainWindow):
                 f"현재 상태: 자동 수집 중 (턴테이블)\n"
                 f"±{span:.0f}도 왕복, 한 칸 {step:.1f}도 x {self.target_count}장"
                 + (f"\n좌우 모터: 가운데 → 왼쪽 → 오른쪽 → 가운데 (±{span2:.0f}도)" if span2 > 0 else "")
+                + ("\n끊김 없이 계속 움직이는 중" if self.smooth_check.isChecked() else "")
+                + self.side_sweep_note(span2)
             )
             self.turn_worker.start()
         else:

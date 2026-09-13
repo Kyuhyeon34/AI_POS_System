@@ -142,6 +142,18 @@ class Turntable:
         """각도만큼 돌린다. 다 돌 때까지 기다렸다가 돌아온다."""
         return self._cmd(f"R{deg}")
 
+    def rotate_async(self, deg):
+        """회전판을 몇 도. 다 돌기를 기다리지 않고 바로 돌아온다.
+        그동안 좌우 모터 명령을 따로 보낼 수 있다."""
+        return self._cmd(f"D{deg}")
+
+    def busy1(self):
+        """회전판에 남은 스텝 수 (0 이면 멈춰 있다)."""
+        try:
+            return int(str(self._cmd("Y1")).split()[-1])
+        except Exception:
+            return 0
+
     def step(self, n):
         return self._cmd(f"S{int(n)}")
 
@@ -166,9 +178,51 @@ class Turntable:
         1번 모터 회전과 동시에 움직인다."""
         return self._cmd(f"W{deg}")
 
+    def set_speed2(self, usec):
+        """2번 모터 스텝 간격(us). 느릴수록 힘이 세다."""
+        return self._cmd(f"U{int(usec)}")
+
+    def set_hold2(self, hold):
+        """멈춘 뒤에도 2번 모터 코일을 켜 둘지. 켜 두면 자리를 붙잡지만 뜨거워진다."""
+        return self._cmd("H1" if hold else "H0")
+
+    def set_mode2(self, half):
+        """2번 모터 방식. False = FULL(힘 셈), True = HALF(부드러움)."""
+        return self._cmd("N1" if half else "N0")
+
+    def set_order2(self, order):
+        """2번 모터 코일 순서 (예: "1324"). 배선 순서가 다를 때 바꾼다."""
+        return self._cmd(f"Q{order}")
+
+    def test_coils2(self):
+        """2번 모터 코일 점검 (드라이버 LED 4개가 차례로 켜진다)."""
+        return self._cmd("G")
+
+    def positions(self):
+        """출발점에서 두 모터가 몇 도 가 있는지. {"turn": 도, "side": 도}"""
+        try:
+            p = str(self._cmd("K")).split()
+            s1, s2, rev1, rev2 = int(p[1]), int(p[2]), float(p[3]), float(p[4])
+            return {"turn": s1 / rev1 * 360.0, "side": s2 / rev2 * 360.0,
+                    "rev": rev1, "rev2": rev2}
+        except Exception:
+            return {"turn": 0.0, "side": 0.0, "rev": 4076.0, "rev2": 4076.0}
+
+    def reset_positions(self):
+        """지금 자리를 0 으로 삼는다 (버튼으로 몇 도 돌렸는지 잴 때)."""
+        return self._cmd("K0")
+
+    def remaining(self):
+        """두 모터에 남은 스텝. {"turn": .., "side": ..}"""
+        return {"turn": self.busy1(), "side": self.busy2()}
+
+    def stop1(self):
+        """회전판을 멈추고 코일을 끈다."""
+        return self._cmd("X1")
+
     def stop2(self):
         """2번 모터를 멈추고 코일을 끈다."""
-        return self._cmd("X")
+        return self._cmd("X2")
 
     def busy2(self):
         """2번 모터에 남은 스텝 수 (0 이면 멈춰 있다)."""
