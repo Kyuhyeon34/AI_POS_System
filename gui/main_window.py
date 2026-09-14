@@ -1349,6 +1349,15 @@ class MainWindow(QMainWindow):
         form.addRow("라벨 방식", self.auto_label_check)
         form.addRow("턴테이블", self.turn_check)
         form.addRow("왕복 각도 (±)", self.span_spin)
+        self.roi_spin = QSpinBox()
+        self.roi_spin.setRange(0, 100)
+        self.roi_spin.setValue(60)
+        self.roi_spin.setSuffix(" %")
+        self.roi_spin.setToolTip(
+            "화면 가운데 이 범위 안에 있는 물체만 잡습니다 (한 개 방식).\n"
+            "가장자리의 케이블·손·트레이 모서리를 무시해서 박스가 덜 튑니다.\n"
+            "0 으로 두면 화면 전체를 봅니다.")
+        form.addRow("가운데 영역", self.roi_spin)
         form.addRow("좌우 모터 (±)", self.span2_spin)
         self.smooth_check = QCheckBox("끊김 없이 계속 움직이기")
         self.smooth_check.setChecked(True)
@@ -2270,6 +2279,14 @@ class MainWindow(QMainWindow):
         품목은 콤보박스에서 고른 것으로 저장한다. 모델이 뭐라고 부르든 상관없다.
         """
         view = frame.copy()
+        # 가운데 영역 안내선 — 이 안에 빵을 놓으면 된다
+        roi = self.roi_spin.value() / 100.0 if hasattr(self, "roi_spin") else 0.0
+        if roi > 0:
+            h, w = view.shape[:2]
+            rx, ry = int(w * (1 - roi) / 2), int(h * (1 - roi) / 2)
+            cv2.rectangle(view, (rx, ry), (w - rx, h - ry), (150, 150, 150), 1)
+            cv2.putText(view, "put ONE bread here", (rx + 6, ry + 22),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (150, 150, 150), 1, cv2.LINE_AA)
         box, why = self.label_box_pixels(frame, self.live_dets)
         if box is None:
             # 무엇을 잡았는데 왜 버렸는지 보여준다 (주황 박스)
@@ -2806,6 +2823,7 @@ class MainWindow(QMainWindow):
 
         self.collect_count = 0
         self.collect_skipped = 0
+        self.reset_steady_box()
         self.target_count = self.target_spin.value()
         self.collecting = True
         self.collect_progress.setValue(0)
@@ -2889,6 +2907,47 @@ class MainWindow(QMainWindow):
     AUTOLABEL_MAX_AREA = 0.85   # 85% 초과면 배경을 잡은 것으로 본다
     SINGLE_MODEL_CONF = 0.35    # 한 개 방식: 배경 분리가 안 돼 모델 박스를 쓸 때 최소 신뢰도 (예전 기준)
 
+    # 박스 흔들림 다듬기 (한 개 방식)
+    STEADY_FOLLOW = 0.35        # 새 박스를 얼마나 따라갈지 (작을수록 덜 흔들린다)
+    STEADY_JUMP_IOU = 0.30      # 이만큼도 안 겹치면 "다른 물체" 로 본다
+    STEADY_JUMP_FRAMES = 3      # 다른 물체라도 이만큼 계속 나오면 그때 옮긴다
+    STEADY_KEEP_FRAMES = 5      # 잠깐 놓쳐도 이만큼은 이전 박스를 유지한다
+
+    def reset_steady_box(self):
+        self._steady_box = None
+        self._steady_miss = 0
+        self._steady_pending = 0
+
+    def steady_box(self, box):
+        """프레임마다 박스가 튀지 않게 다듬는다.
+
+        · 가까운 자리면 조금씩 따라간다 (떨림 제거)
+        · 엉뚱한 곳이면 몇 프레임 계속 나올 때만 옮긴다 (튐 방지)
+        · 잠깐 놓치면 직전 박스를 유지한다 (깜빡임 방지)
+        """
+        if not hasattr(self, "_steady_box"):
+            self.reset_steady_box()
+        prev = self._steady_box
+        if box is None:
+            self._steady_miss += 1
+            if prev is not None and self._steady_miss <= self.STEADY_KEEP_FRAMES:
+                return tuple(int(round(v)) for v in prev)
+            self._steady_box = None
+            return None
+        self._steady_miss = 0
+        box = tuple(float(v) for v in box)
+        if prev is None:
+            self._steady_box, self._steady_pending = box, 0
+        elif self._iou(prev, box) >= self.STEADY_JUMP_IOU:
+            a = self.STEADY_FOLLOW
+            self._steady_box = tuple(prev[i] * (1 - a) + box[i] * a for i in range(4))
+            self._steady_pending = 0
+        else:
+            self._steady_pending += 1
+            if self._steady_pending >= self.STEADY_JUMP_FRAMES:
+                self._steady_box, self._steady_pending = box, 0
+        return tuple(int(round(v)) for v in self._steady_box)
+
     def pick_label_box(self, detections, frame_shape, min_conf=None):
         """검출 결과 중 라벨로 쓸 만한 박스 하나를 고른다.
 
@@ -2901,7 +2960,14 @@ class MainWindow(QMainWindow):
             return None, "no bread found"
 
         h, w = frame_shape[:2]
-        best = max(detections, key=lambda d: d["confidence"])
+        cx0, cy0 = w / 2.0, h / 2.0
+        ok = [d for d in detections
+              if float(d.get("confidence", 0)) >= (self.AUTOLABEL_CONF if min_conf is None else min_conf)]
+        if ok:      # 가운데에 놓고 찍으므로, 화면 중심에 가장 가까운 것을 고른다
+            best = min(ok, key=lambda d: ((d["xyxy"][0] + d["xyxy"][2]) / 2 - cx0) ** 2
+                                          + ((d["xyxy"][1] + d["xyxy"][3]) / 2 - cy0) ** 2)
+        else:
+            best = max(detections, key=lambda d: d["confidence"])
         if best["confidence"] < (self.AUTOLABEL_CONF if min_conf is None else min_conf):
             return None, f"low conf {best['confidence']:.2f}"
 
@@ -2925,13 +2991,15 @@ class MainWindow(QMainWindow):
         (흰 유산지/밝은 트레이 위 물체를 색·밝기로 잡는다. 클래스는 보지 않는다)
         배경이 지저분해 분리가 안 되면, 아는 빵일 수도 있으니 모델 검출로 넘어간다.
         """
+        roi = self.roi_spin.value() / 100.0 if hasattr(self, "roi_spin") else 0.0
         box, why, cand = object_box(frame,
                                     min_area=self.AUTOLABEL_MIN_AREA,
-                                    max_area=self.AUTOLABEL_MAX_AREA)
+                                    max_area=self.AUTOLABEL_MAX_AREA,
+                                    roi=roi)
         self.last_segment_candidate = cand
         if box is not None:
             self.collect_need_model = False
-            return box, "auto"
+            return self.steady_box(box), "auto"
 
         self.collect_need_model = True
 
@@ -2943,8 +3011,8 @@ class MainWindow(QMainWindow):
         best, why2 = self.pick_label_box(detections or [], frame.shape,
                                          min_conf=self.SINGLE_MODEL_CONF)
         if best is not None:
-            return tuple(best["xyxy"]), "model"
-        return None, why
+            return self.steady_box(tuple(best["xyxy"])), "model"
+        return self.steady_box(None), why
 
     def auto_label_box(self, frame):
         """촬영 순간의 라벨 좌표 (xc, yc, w, h) 정규화 값."""
