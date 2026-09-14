@@ -54,7 +54,7 @@ class MainWindow(QMainWindow):
 
     QR_EVERY = 6            # 6프레임(약 0.2초)마다 한 번만 QR 검사
     QR_FAST_WIDTH = 800     # 프리뷰 QR 검사는 이 폭으로 축소해서 (약 29ms)
-    QR_HOLD_FRAMES = 45     # 검출 결과 유지 시간 (약 1.5초)
+    QR_HOLD_SEC = 1.0       # 마지막으로 읽힌 뒤 이 시간이 지나면 QR 표시를 지운다
 
     # 화면 그리기가 느린 환경(SSH X11 포워딩은 프레임당 100ms 가까이 든다)에서
     # 매 프레임 그리면 UI 스레드가 꽉 차서 버튼이 안 눌린다.
@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
         self.qr_detector = cv2.QRCodeDetector()
         self.last_qr_data = ""
         self.last_qr_points = None
-        self.qr_seen_frames = 0
+        self.qr_seen_ts = 0.0
         self.qr_frame_tick = 0
         self.qr_state = None
         self.last_frame_id = -1
@@ -1745,7 +1745,7 @@ class MainWindow(QMainWindow):
     def stop_camera(self):
         self.last_qr_data = ""
         self.last_qr_points = None
-        self.qr_seen_frames = 0
+        self.qr_seen_ts = 0.0
         self.qr_state = None
         if hasattr(self, "qr_live_label"):
             self.qr_live_label.setText("QR 대기 중")
@@ -2487,22 +2487,28 @@ class MainWindow(QMainWindow):
     def on_qr_result(self, data, points):
         """QR 스레드가 결과를 보내왔다. (GUI 스레드에서 실행된다)
 
-        한 번 읽힌 QR 은 QR_HOLD_FRAMES 동안 유지한다. 손이 흔들려 한두 프레임
+        한 번 읽힌 QR 은 QR_HOLD_SEC 동안 유지한다. 손이 흔들려 한두 번
         놓쳐도 초록 테두리가 깜빡이지 않게 하기 위해서다.
+
+        유지 시간은 결과 개수가 아니라 시각으로 잰다. 결과는 QR_EVERY 프레임마다,
+        그것도 워커가 비어 있을 때만 오므로 개수로 세면 카메라 fps 에 따라
+        수 초~수십 초씩 늘어나 QR 을 치워도 테두리가 남는다.
         """
         if data:
             self.last_qr_data = data
             self.last_qr_points = points
-            self.qr_seen_frames = self.QR_HOLD_FRAMES
+            self.qr_seen_ts = time.perf_counter()
             self._set_qr_state("member" if data.startswith("BV1:") else "other")
             return
+        self._expire_qr(time.perf_counter())
 
-        if self.qr_seen_frames > 0:
-            self.qr_seen_frames -= 1
-        else:
-            self.last_qr_data = ""
-            self.last_qr_points = None
-            self._set_qr_state("none")
+    def _expire_qr(self, now):
+        """마지막으로 읽힌 지 QR_HOLD_SEC 가 지났으면 QR 표시와 값을 지운다."""
+        if self.last_qr_data and now - self.qr_seen_ts <= self.QR_HOLD_SEC:
+            return
+        self.last_qr_data = ""
+        self.last_qr_points = None
+        self._set_qr_state("none")
 
     def update_frame(self):
         # ── 이벤트 루프가 밀렸는지 먼저 잰다 ──────────────────────────────
@@ -2563,6 +2569,9 @@ class MainWindow(QMainWindow):
                 and not self.qr_worker.busy):
             self.qr_frame_tick = 0
             self.qr_worker.submit(frame.copy())
+
+        # QR 검사 결과가 안 오는 동안(다른 탭, 워커 지연)에도 시간이 지나면 지운다.
+        self._expire_qr(now)
 
         # 그리기에는 늘 가장 최근 결과를 쓴다.
         qr_data, qr_points = self.last_qr_data, self.last_qr_points
