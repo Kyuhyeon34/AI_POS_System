@@ -11,7 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer, QProcess
-from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont
+from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont, QFontDatabase
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTabWidget, QLineEdit, QSpinBox, QDoubleSpinBox, QProgressBar,
@@ -69,6 +69,8 @@ class MainWindow(QMainWindow):
                                 # 다 쓰면 화면·QR·수집이 같이 느려진다.
     def __init__(self):
         super().__init__()
+        # 위젯마다 스타일을 붙이기 전에 등록해야 Jua 가 적용된다
+        self.load_fonts()
         self.setWindowTitle("BreadVision AI Bakery POS")
         self.resize(1560, 940)
 
@@ -178,260 +180,341 @@ class MainWindow(QMainWindow):
         self.try_load_saved_engine()
 
     # -------------------- STYLE --------------------
+    # 회원 앱(BreadVision Member)과 같은 따뜻한 빵집 톤.
+    #   배경 #FBF1E3 크림 · 카드 #F3E1C7 · 포인트 #B5651D 캐러멜 · 글자 #3E2723
+    #   제목·버튼·큰 숫자는 Jua, 표·입력·작은 글자는 맑은 고딕
+    FONT_DIR = Path(__file__).resolve().parent / "fonts"
+
+    def load_fonts(self):
+        """Jua 를 앱 전용 폰트로 등록한다. 실패하면 기본 한글 폰트로 보인다."""
+        path = self.FONT_DIR / "Jua-Regular.ttf"
+        if path.exists() and QFontDatabase.addApplicationFont(str(path)) < 0:
+            print(f"[폰트] 등록 실패: {path}")
+
     def apply_style(self):
         self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background: #0A0F16;
-                color: #E8EEF5;
+            QMainWindow, QDialog, QMessageBox, QInputDialog, QFileDialog {
+                background: #FBF1E3;
+            }
+
+            QWidget {
+                color: #3E2723;
                 font-size: 14px;
-                font-family: "Malgun Gothic";
+                font-family: "Malgun Gothic", "Noto Sans CJK KR", "NanumGothic", sans-serif;
+            }
+
+            QLabel, QCheckBox, QRadioButton {
+                background: transparent;
+            }
+
+            QToolTip {
+                background: #3E2723;
+                color: #FFF8ED;
+                border: none;
+                padding: 6px 8px;
             }
 
             QTabWidget::pane {
-                border: 1px solid #1E2A38;
-                background: #0E141C;
-                top: -1px;
+                border: none;
+                border-top: 2px solid #E3CBA7;
+                background: #FBF1E3;
+                top: -2px;
             }
 
             QTabBar::tab {
-                background: #111923;
-                color: #8FA0B3;
-                border: 1px solid #202D3B;
+                background: #F3E1C7;
+                color: #8D6E63;
+                border: 1px solid #E3CBA7;
                 border-bottom: none;
-                padding: 13px 24px;
+                border-top-left-radius: 12px;
+                border-top-right-radius: 12px;
+                padding: 12px 24px;
+                margin-right: 4px;
                 min-width: 150px;
-                font-weight: 700;
+                font-family: "Jua";
+                font-size: 16px;
             }
 
             QTabBar::tab:hover {
-                background: #152131;
-                color: #DCE8F6;
+                background: #EED6B4;
+                color: #5D4037;
             }
 
             QTabBar::tab:selected {
-                background: #0F1722;
-                color: #5DA9FF;
-                border-top: 3px solid #2D8CFF;
+                background: #FBF1E3;
+                color: #8B4513;
+                border: 2px solid #E3CBA7;
+                border-bottom: 2px solid #FBF1E3;
+                border-top: 3px solid #B5651D;
             }
 
             QLabel#PageTitle {
-                font-size: 25px;
-                font-weight: 900;
-                color: #F4F8FC;
+                font-family: "Jua";
+                font-size: 26px;
+                color: #3E2723;
             }
 
             QLabel#PageDesc {
-                color: #8E9FB1;
+                color: #8D6E63;
                 font-size: 13px;
             }
 
             QLabel#TotalCaption {
-                font-size: 15px;
-                font-weight: 700;
-                color: #9FB0C2;
+                font-family: "Jua";
+                font-size: 17px;
+                color: #8D6E63;
             }
 
             QLabel#TotalValue {
-                color: #FFFFFF;
-                font-size: 44px;
-                font-weight: 900;
+                font-family: "Jua";
+                color: #B5651D;
+                font-size: 48px;
             }
 
             QLabel#ReceiptInfo {
-                color: #91A3B5;
+                color: #8D6E63;
                 font-size: 13px;
                 font-weight: 700;
             }
 
             QGroupBox {
-                background: #101822;
-                border: 1px solid #243343;
-                border-radius: 8px;
-                margin-top: 14px;
-                padding: 13px;
-                font-weight: 800;
-                color: #DDE6EF;
+                background: #F3E1C7;
+                border: 1px solid #E3CBA7;
+                border-radius: 16px;
+                margin-top: 18px;
+                padding: 14px;
+                font-family: "Jua";
+                font-size: 15px;
+                color: #5D4037;
             }
 
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 12px;
+                left: 14px;
                 padding: 0 6px;
-                color: #AFC4D9;
+                color: #8B4513;
             }
 
             QPushButton {
-                background: #141E29;
-                color: #DCE6F0;
-                border: 1px solid #2A3948;
-                border-radius: 6px;
-                padding: 10px 13px;
-                font-weight: 700;
+                background: #FFFBF4;
+                color: #5D4037;
+                border: 1px solid #D9B98E;
+                border-radius: 12px;
+                padding: 10px 14px;
+                font-family: "Jua";
+                font-size: 15px;
             }
 
             QPushButton:hover {
-                background: #192838;
-                border-color: #3C5A78;
+                background: #F6E3C8;
+                border-color: #B5651D;
             }
 
             QPushButton:pressed {
-                background: #0D1520;
+                background: #EED6B4;
+            }
+
+            QPushButton:disabled {
+                background: #F3E6D4;
+                color: #BCAAA4;
+                border-color: #E8D5BA;
             }
 
             QPushButton#Primary {
-                background: #1468C3;
-                color: white;
-                border: 1px solid #2B7ED5;
+                background: #B5651D;
+                color: #FFF8ED;
+                border: 1px solid #A0561A;
             }
 
             QPushButton#Primary:hover {
-                background: #1B77D6;
+                background: #C47329;
+            }
+
+            QPushButton#Primary:pressed {
+                background: #8B4513;
             }
 
             QPushButton#Success {
-                background: #0E5EA8;
-                color: white;
-                border: 1px solid #2478C3;
-                font-size: 17px;
-                padding: 15px;
+                background: #8B4513;
+                color: #FFF8ED;
+                border: 1px solid #7A3C10;
+                border-radius: 14px;
+                font-size: 20px;
+                padding: 16px;
             }
 
             QPushButton#Success:hover {
-                background: #1170C6;
+                background: #A0561A;
+            }
+
+            QPushButton#Success:pressed {
+                background: #6D360F;
             }
 
             QPushButton#Danger {
-                background: #1A222C;
-                color: #FF7B7B;
-                border: 1px solid #5C2A2A;
+                background: #FFF4F1;
+                color: #B3261E;
+                border: 1px solid #E8B1A8;
             }
 
             QPushButton#Danger:hover {
-                background: #2A171A;
-                border-color: #8A3C3C;
+                background: #FBE3DF;
+                border-color: #C9574B;
             }
 
             QPushButton#Warning {
-                background: #0B3F73;
-                color: white;
-                border: 1px solid #1E6CAF;
+                background: #D9A66C;
+                color: #3E2723;
+                border: 1px solid #C48F52;
             }
 
             QPushButton#Warning:hover {
-                background: #0E518F;
+                background: #E3B47E;
             }
 
             QPushButton#Dark {
-                background: #0C1219;
-                color: #DCE5EE;
-                border: 1px solid #243140;
+                background: #F3E1C7;
+                color: #5D4037;
+                border: 1px solid #D9B98E;
+            }
+
+            QPushButton#Dark:hover {
+                background: #EED6B4;
             }
 
             QPushButton#ProductButton {
-                background: #0F1720;
-                color: #E8EEF5;
-                border: 1px solid #263646;
+                background: #FFFBF4;
+                color: #3E2723;
+                border: 1px solid #E3CBA7;
+                border-radius: 14px;
                 min-height: 64px;
-                font-size: 14px;
+                font-size: 16px;
                 text-align: left;
-                padding-left: 13px;
+                padding-left: 14px;
             }
 
             QPushButton#ProductButton:hover {
-                background: #12243A;
-                border: 1px solid #2D8CFF;
-                color: #FFFFFF;
+                background: #F6E3C8;
+                border: 2px solid #B5651D;
+                color: #8B4513;
             }
 
             QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-                background: #0D141D;
-                color: #E6EDF5;
-                border: 1px solid #2A3948;
-                border-radius: 6px;
+                background: #FFFBF4;
+                color: #3E2723;
+                border: 1px solid #D9B98E;
+                border-radius: 10px;
                 padding: 8px;
                 min-height: 24px;
-                selection-background-color: #245B91;
+                selection-background-color: #EBCB9F;
+                selection-color: #3E2723;
+            }
+
+            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+                border: 2px solid #B5651D;
             }
 
             QComboBox QAbstractItemView {
-                background: #101822;
-                color: #E6EDF5;
-                selection-background-color: #1E5F99;
-                border: 1px solid #2B3A49;
+                background: #FFFBF4;
+                color: #3E2723;
+                selection-background-color: #EBCB9F;
+                selection-color: #3E2723;
+                border: 1px solid #D9B98E;
+            }
+
+            QCheckBox {
+                spacing: 8px;
             }
 
             QTableWidget {
-                background: #0C1219;
-                alternate-background-color: #101821;
-                gridline-color: #1D2A37;
-                selection-background-color: #173A5D;
-                selection-color: #FFFFFF;
-                border: 1px solid #24313F;
+                background: #FFFBF4;
+                alternate-background-color: #F8EBD8;
+                gridline-color: #EAD7BC;
+                selection-background-color: #EBCB9F;
+                selection-color: #3E2723;
+                border: 1px solid #E3CBA7;
+                border-radius: 10px;
                 font-size: 14px;
             }
 
+            QHeaderView {
+                background: #F3E1C7;
+                border: none;
+            }
+
             QHeaderView::section {
-                background: #141D27;
-                color: #AFC0D1;
+                background: #F3E1C7;
+                color: #5D4037;
                 padding: 9px;
                 border: none;
-                border-right: 1px solid #24313F;
-                font-weight: 800;
+                border-right: 1px solid #E3CBA7;
+                border-bottom: 1px solid #E3CBA7;
+                font-weight: 700;
+            }
+
+            QTableCornerButton::section {
+                background: #F3E1C7;
+                border: none;
             }
 
             QPlainTextEdit {
-                background: #080D12;
-                color: #C9D5E1;
-                border: 1px solid #24313F;
-                font-family: Consolas;
+                background: #FFFBF4;
+                color: #4E342E;
+                border: 1px solid #E3CBA7;
+                border-radius: 10px;
+                font-family: Consolas, "D2Coding", monospace;
             }
 
             QProgressBar {
-                background: #0C1219;
-                border: 1px solid #263442;
-                border-radius: 5px;
+                background: #F3E1C7;
+                border: 1px solid #E3CBA7;
+                border-radius: 8px;
                 text-align: center;
                 min-height: 22px;
-                color: #DCE6F0;
+                color: #3E2723;
             }
 
             QProgressBar::chunk {
-                background: #2D8CFF;
-                border-radius: 4px;
+                background: #B5651D;
+                border-radius: 7px;
             }
 
             QFrame#Card {
-                background: #0F1720;
-                border: 1px solid #223141;
-                border-radius: 8px;
+                background: #F3E1C7;
+                border: 1px solid #E3CBA7;
+                border-radius: 20px;
             }
 
             QFrame#POSHeader {
-                background: #0B1118;
-                border: 1px solid #1D2A37;
-                border-radius: 8px;
+                background: #FFF8ED;
+                border: 1px solid #E3CBA7;
+                border-radius: 20px;
             }
 
             QFrame#TotalBox {
-                background: #0A1B2D;
-                border: 1px solid #245B91;
-                border-radius: 8px;
+                background: #FFF8ED;
+                border: 2px solid #D9A66C;
+                border-radius: 16px;
             }
 
             QScrollBar:vertical {
-                background: #0B1118;
+                background: transparent;
                 width: 11px;
                 margin: 0;
             }
 
             QScrollBar::handle:vertical {
-                background: #2A3948;
+                background: #D9B98E;
                 min-height: 25px;
                 border-radius: 5px;
             }
 
             QScrollBar::handle:vertical:hover {
-                background: #3A5066;
+                background: #B5651D;
+            }
+
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0;
             }
         """)
 
@@ -534,22 +617,22 @@ class MainWindow(QMainWindow):
 
         title_box = QVBoxLayout()
         title = QLabel("BreadVision POS | JETSON")
-        title.setStyleSheet("color:#F6F9FC; font-size:24px; font-weight:900;")
+        title.setStyleSheet('font-family:"Jua"; color:#3E2723; font-size:26px;')
         subtitle = QLabel("AI Recognition  ·  Order  ·  Price Calculation  ·  Payment")
-        subtitle.setStyleSheet("color:#7F93A8; font-size:12px;")
+        subtitle.setStyleSheet("color:#8D6E63; font-size:12px;")
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
 
         self.camera_state = QLabel("CAMERA  OFF")
         self.camera_state.setStyleSheet(
-            "background:#131D27; color:#91A3B5; padding:8px 12px; "
-            "border:1px solid #2B3947; border-radius:6px; font-weight:800;"
+            "background:#F3E1C7; color:#8D6E63; padding:8px 12px; "
+            "border:1px solid #E3CBA7; border-radius:10px; font-weight:800;"
         )
 
         self.active_model_badge = QLabel("MODEL  NOT SET")
         self.active_model_badge.setStyleSheet(
-            "background:#131D27; color:#6EAFFF; padding:8px 12px; "
-            "border:1px solid #244A70; border-radius:6px; font-weight:800;"
+            "background:#F3E1C7; color:#B5651D; padding:8px 12px; "
+            "border:1px solid #D9A66C; border-radius:10px; font-weight:800;"
         )
 
         header_lay.addLayout(title_box)
@@ -569,7 +652,7 @@ class MainWindow(QMainWindow):
 
         camera_head = QHBoxLayout()
         camera_title = QLabel("LIVE VIEW / PRODUCT RECOGNITION")
-        camera_title.setStyleSheet("font-size:18px; font-weight:900;")
+        camera_title.setStyleSheet('font-family:"Jua"; font-size:19px; color:#5D4037;')
         guide = QLabel("트레이를 카메라 영역에 맞춘 뒤 인식을 실행하세요.")
         guide.setObjectName("PageDesc")
         camera_head.addWidget(camera_title)
@@ -581,7 +664,7 @@ class MainWindow(QMainWindow):
         self.pos_camera.setAlignment(Qt.AlignCenter)
         self.pos_camera.setMinimumSize(760, 500)
         self.pos_camera.setStyleSheet(
-            "background:#20252C; color:white; border-radius:7px; "
+            "background:#2B211C; color:#FFF8ED; border-radius:14px; "
             "font-size:17px; font-weight:700;"
         )
         left.addWidget(self.pos_camera, 1)
@@ -646,7 +729,7 @@ class MainWindow(QMainWindow):
 
         receipt_head = QHBoxLayout()
         receipt_title = QLabel("ORDER")
-        receipt_title.setStyleSheet("font-size:20px; font-weight:900;")
+        receipt_title.setStyleSheet('font-family:"Jua"; font-size:21px; color:#5D4037;')
         self.item_count_label = QLabel("총 0개")
         self.item_count_label.setObjectName("ReceiptInfo")
         receipt_head.addWidget(receipt_title)
@@ -658,7 +741,7 @@ class MainWindow(QMainWindow):
         member_lay = QVBoxLayout(member_box)
         member_top = QHBoxLayout()
         self.member_status_label = QLabel("회원 미인증")
-        self.member_status_label.setStyleSheet("font-size:16px; font-weight:900;")
+        self.member_status_label.setStyleSheet('font-family:"Jua"; font-size:17px; color:#5D4037;')
         self.member_point_label = QLabel("")
         self.member_point_label.setObjectName("ReceiptInfo")
         member_top.addWidget(self.member_status_label)
@@ -668,7 +751,7 @@ class MainWindow(QMainWindow):
 
         self.qr_live_label = QLabel("QR 대기 중")
         self.qr_live_label.setStyleSheet(
-            "color:#91A3B5; font-size:12px; font-weight:700;"
+            "color:#8D6E63; font-size:12px; font-weight:700;"
         )
         member_lay.addWidget(self.qr_live_label)
 
@@ -757,7 +840,7 @@ class MainWindow(QMainWindow):
             "Workflow  |  Camera → Recognition → Order Check → Total → Payment"
         )
         pos_help.setStyleSheet(
-            "color:#6F8498; padding:6px 2px; font-size:12px;"
+            "color:#8D6E63; padding:6px 2px; font-size:12px;"
         )
         pos_help.setWordWrap(True)
         right.addWidget(pos_help)
@@ -1128,7 +1211,7 @@ class MainWindow(QMainWindow):
         self.new_price.setSuffix(" 원")
 
         self.auto_class_id_label = QLabel("-")
-        self.auto_class_id_label.setStyleSheet("font-weight:800; color:#0B63CE;")
+        self.auto_class_id_label.setStyleSheet("font-weight:800; color:#8B4513;")
 
         form.addRow("상품명", self.new_display_name)
         form.addRow("YOLO Class Name", self.new_class_name)
@@ -1277,7 +1360,7 @@ class MainWindow(QMainWindow):
         self.collect_camera.setAlignment(Qt.AlignCenter)
         self.collect_camera.setMinimumSize(900, 650)
         self.collect_camera.setStyleSheet(
-            "background:#20252C; color:white; border-radius:8px; font-size:16px;"
+            "background:#2B211C; color:#FFF8ED; border-radius:14px; font-size:16px;"
         )
         left.addWidget(self.collect_camera)
 
@@ -1429,7 +1512,7 @@ class MainWindow(QMainWindow):
 
         self.collect_status = QLabel("현재 상태: 대기 중")
         self.collect_status.setStyleSheet(
-            "background:#EEF3F8; border:1px solid #D5DDE5; padding:10px; border-radius:7px;"
+            "background:#FFFBF4; border:1px solid #E3CBA7; padding:10px; border-radius:10px; color:#3E2723;"
         )
         self.collect_status.setWordWrap(True)
         right.addWidget(self.collect_status)
@@ -1475,7 +1558,7 @@ class MainWindow(QMainWindow):
         guide = QLabel()
         guide.setWordWrap(True)
         guide.setStyleSheet(
-            "background:#0C1722; border:1px solid #24405B; padding:12px; border-radius:8px; color:#AFC4D9;"
+            "background:#F6E3C8; border:1px solid #E3CBA7; padding:12px; border-radius:12px; color:#5D4037;"
         )
         self.collect_guide = guide
         right.addWidget(guide)
@@ -1648,8 +1731,8 @@ class MainWindow(QMainWindow):
 
             self.camera_state.setText(f"CAMERA  ON · {self.camera_source_label(self.camera.index)[:24]}")
             self.camera_state.setStyleSheet(
-                "background:#0E2740; color:#7CC0FF; padding:8px 12px; "
-                "border:1px solid #245B91; border-radius:6px; font-weight:800;"
+                "background:#E6F2DF; color:#2E7D32; padding:8px 12px; "
+                "border:1px solid #B9D8AC; border-radius:10px; font-weight:800;"
             )
         except Exception as e:
             QMessageBox.critical(
@@ -1678,8 +1761,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "camera_state"):
             self.camera_state.setText("CAMERA  OFF")
             self.camera_state.setStyleSheet(
-                "background:#131D27; color:#91A3B5; padding:8px 12px; "
-                "border:1px solid #2B3947; border-radius:6px; font-weight:800;"
+                "background:#F3E1C7; color:#8D6E63; padding:8px 12px; "
+                "border:1px solid #E3CBA7; border-radius:10px; font-weight:800;"
             )
 
     def _decode_qr_robust(self, frame, fast=False):
@@ -1768,11 +1851,11 @@ class MainWindow(QMainWindow):
 
     QR_LABEL_STYLE = {
         "member": ("● 회원 QR 인식됨 — 스캔 버튼을 누르세요",
-                   "color:#35D07F; font-size:12px; font-weight:900;"),
+                   "color:#2E7D32; font-size:12px; font-weight:900;"),
         "other": ("● QR 인식됨 — BreadVision 회원 QR은 아닙니다",
-                  "color:#F3B64A; font-size:12px; font-weight:900;"),
+                  "color:#9A6700; font-size:12px; font-weight:900;"),
         "none": ("QR 대기 중 — 휴대폰 QR을 카메라에 보여주세요",
-                 "color:#91A3B5; font-size:12px; font-weight:700;"),
+                 "color:#8D6E63; font-size:12px; font-weight:700;"),
     }
 
     def _set_qr_state(self, state):
@@ -3236,7 +3319,7 @@ class MainWindow(QMainWindow):
             "PC 에서는 파일을 보내고 버튼만 누르면 됩니다."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("background:#0C1722; border:1px solid #24405B; padding:12px; border-radius:8px; color:#AFC4D9;")
+        note.setStyleSheet("background:#F6E3C8; border:1px solid #E3CBA7; padding:12px; border-radius:12px; color:#5D4037;")
         root.addWidget(note)
         root.addStretch(1)
         self.refresh_model_labels()
@@ -3251,8 +3334,8 @@ class MainWindow(QMainWindow):
             return
         self.phase_label.setText(text)
         self.phase_label.setStyleSheet(
-            "background:#10233A; border:1px solid #2D5C8F; padding:10px; "
-            "border-radius:7px; color:#9FC8F5; font-weight:700;")
+            "background:#F6E3C8; border:1px solid #D9A66C; padding:10px; "
+            "border-radius:10px; color:#8B4513; font-weight:700;")
         self.phase_label.setVisible(True)
 
     def refresh_ops_status(self):
@@ -3266,13 +3349,13 @@ class MainWindow(QMainWindow):
                 "젯슨에 따로 접속할 필요가 없습니다."
             )
             self.ops_status.setStyleSheet(
-                "background:#0B2418; border:1px solid #1E5B3A; padding:9px; "
-                "border-radius:7px; color:#7FE0A8;")
+                "background:#E6F2DF; border:1px solid #B9D8AC; padding:9px; "
+                "border-radius:10px; color:#2E7D32;")
         elif self.is_jetson():
             self.ops_status.setText("● 젯슨에서 직접 실행 중 — 아래 기능을 모두 쓸 수 있습니다.")
             self.ops_status.setStyleSheet(
-                "background:#0B2418; border:1px solid #1E5B3A; padding:9px; "
-                "border-radius:7px; color:#7FE0A8;")
+                "background:#E6F2DF; border:1px solid #B9D8AC; padding:9px; "
+                "border-radius:10px; color:#2E7D32;")
         else:
             self.ops_status.setText(
                 "● 젯슨에 연결되지 않았습니다 — 학습·변환은 젯슨이 해야 하는 일이라 "
@@ -3281,8 +3364,8 @@ class MainWindow(QMainWindow):
                 "BREADVISION_INFER_URL 을 젯슨 주소로 지정한 뒤 다시 켜주세요."
             )
             self.ops_status.setStyleSheet(
-                "background:#2A1410; border:1px solid #6B2E22; padding:9px; "
-                "border-radius:7px; color:#F0A99B;")
+                "background:#FBE3DF; border:1px solid #E8B1A8; padding:9px; "
+                "border-radius:10px; color:#B3261E;")
 
     def select_onnx_model(self):
         path, _ = QFileDialog.getOpenFileName(self, "Colab ONNX 선택", str(BASE_DIR / "models"), "ONNX Model (*.onnx)")
@@ -3472,8 +3555,8 @@ class MainWindow(QMainWindow):
             if engine:
                 self.active_model_badge.setText(f"ENGINE  {Path(engine).name}")
                 self.active_model_badge.setStyleSheet(
-                    "background:#0E2740; color:#7CC0FF; padding:8px 12px; "
-                    "border:1px solid #245B91; border-radius:6px; font-weight:800;"
+                    "background:#F6E3C8; color:#8B4513; padding:8px 12px; "
+                    "border:1px solid #D9A66C; border-radius:10px; font-weight:800;"
                 )
             else:
                 self.active_model_badge.setText("ENGINE  NOT SET")
