@@ -52,7 +52,10 @@ class MainWindow(QMainWindow):
     # 탭 순서 (build 순서와 같아야 한다)
     TAB_POS, TAB_PRODUCT, TAB_COLLECT, TAB_TRAIN, TAB_MEMBER = range(5)
 
-    QR_EVERY = 6            # 6프레임(약 0.2초)마다 한 번만 QR 검사
+    # QR 은 「회원 QR 스캔」을 눌렀을 때(스캔 모드)만 찾는다.
+    QR_SCAN_EVERY = 2       # 스캔 모드에서는 2프레임마다 검사 — 대자마자 읽히게
+    QR_SCAN_TIMEOUT_SEC = 30.0  # 스캔 모드를 켜 두고 이만큼 지나면 저절로 끈다 (빵 인식 복귀)
+    QR_RETRY_SEC = 3.0      # 조회에 실패한 같은 QR 은 이 시간 동안 다시 조회하지 않는다
     QR_FAST_WIDTH = 800     # 프리뷰 QR 검사는 이 폭으로 축소해서 (약 29ms)
     QR_HOLD_SEC = 1.0       # 마지막으로 읽힌 뒤 이 시간이 지나면 QR 표시를 지운다
 
@@ -140,6 +143,9 @@ class MainWindow(QMainWindow):
         self.qr_seen_ts = 0.0
         self.qr_frame_tick = 0
         self.qr_state = None
+        self.qr_scan_mode = False        # 「회원 QR 스캔」을 눌러 빵 대신 QR 만 찾는 중인가
+        self.qr_scan_started = 0.0
+        self.qr_failed = ("", 0.0)       # (조회에 실패한 QR 값, 시각) — 같은 QR 연타 조회 방지
         self.last_frame_id = -1
         self.last_display_ts = 0.0
         self.last_tick_ts = 0.0
@@ -749,21 +755,23 @@ class MainWindow(QMainWindow):
         member_top.addWidget(self.member_point_label)
         member_lay.addLayout(member_top)
 
-        self.qr_live_label = QLabel("QR 대기 중")
-        self.qr_live_label.setStyleSheet(
-            "color:#8D6E63; font-size:12px; font-weight:700;"
-        )
+        text, style = self.QR_LABEL_STYLE["none"]
+        self.qr_live_label = QLabel(text)
+        self.qr_live_label.setStyleSheet(style)
         member_lay.addWidget(self.qr_live_label)
 
         member_btns = QHBoxLayout()
-        btn_member_scan = QPushButton("회원 QR 스캔")
-        btn_member_scan.setObjectName("Primary")
-        btn_member_scan.setToolTip("현재 카메라 화면에서 휴대폰 멤버십 QR을 읽습니다.")
-        btn_member_scan.clicked.connect(self.scan_member_qr)
+        self.btn_member_scan = QPushButton("회원 QR 스캔")
+        self.btn_member_scan.setObjectName("Primary")
+        self.btn_member_scan.setToolTip(
+            "누르면 빵 인식을 멈추고 QR 만 찾습니다.\n"
+            "휴대폰 멤버십 QR 을 카메라에 대면 자동으로 회원이 등록됩니다. 다시 누르면 취소."
+        )
+        self.btn_member_scan.clicked.connect(self.toggle_qr_scan)
         btn_member_clear = QPushButton("회원 해제")
         btn_member_clear.setObjectName("Dark")
         btn_member_clear.clicked.connect(self.clear_member)
-        member_btns.addWidget(btn_member_scan, 2)
+        member_btns.addWidget(self.btn_member_scan, 2)
         member_btns.addWidget(btn_member_clear)
         member_lay.addLayout(member_btns)
 
@@ -962,58 +970,67 @@ class MainWindow(QMainWindow):
         self.cart.clear()
         self.refresh_cart_table()
 
-    def scan_member_qr(self):
-        frame = getattr(self, "frame", None)
-        if frame is None:
+    def toggle_qr_scan(self):
+        """「회원 QR 스캔」 — 스캔 모드를 켜고 끈다.
+
+        스캔 모드에서는 실시간 빵 인식을 멈추고 QR 만 찾는다.
+        회원 QR 이 잡히면 버튼을 다시 누를 필요 없이 바로 조회해 회원으로 등록한다.
+        적립은 지금처럼 「결제 완료」 때 결제 금액 기준으로 들어간다
+        (QR 을 먼저 대고 빵을 나중에 담아도 금액이 맞게).
+        """
+        if self.qr_scan_mode:
+            self.stop_qr_scan("QR 스캔을 취소했습니다.")
+            return
+        if getattr(self, "frame", None) is None or not self.camera_timer.isActive():
             QMessageBox.information(
                 self, "카메라 필요",
-                "카메라를 먼저 시작한 뒤 휴대폰의 멤버십 QR을 카메라에 보여주세요."
+                "카메라를 먼저 시작한 뒤 「회원 QR 스캔」을 눌러주세요."
             )
             return
+        self.qr_scan_mode = True
+        self.qr_scan_started = time.perf_counter()
+        self.qr_failed = ("", 0.0)
+        self.qr_frame_tick = self.QR_SCAN_EVERY    # 다음 프레임부터 바로 검사
+        self.live_dets = []                         # 화면의 빵 박스를 바로 지운다
+        self.btn_member_scan.setText("QR 스캔 중… (누르면 취소)")
+        self._set_qr_state("scan")
 
-        # Prefer the QR detected continuously in update_frame().
-        data = getattr(self, "last_qr_data", "") or ""
-        if not data:
-            data, points = self._decode_qr_robust(frame)
-            if data:
-                self.last_qr_data = data
-                self.last_qr_points = points
+    def stop_qr_scan(self, message=""):
+        """스캔 모드를 끝내고 빵 인식 화면으로 돌아간다."""
+        self.qr_scan_mode = False
+        self.last_qr_data = ""
+        self.last_qr_points = None
+        if hasattr(self, "btn_member_scan"):
+            self.btn_member_scan.setText("회원 QR 스캔")
+        self._set_qr_state("none")
+        if message:
+            self.statusBar().showMessage(message, 5000)
 
-        if not data:
-            QMessageBox.information(
-                self, "QR 미검출",
-                "QR을 아직 읽지 못했습니다.\n"
-                "휴대폰 밝기를 높이고 QR 전체가 카메라 화면에 들어오게 한 뒤, "
-                "초록색 테두리가 나타날 때 다시 눌러주세요."
-            )
-            return
-
+    def _auto_member_from_qr(self, data):
+        """스캔 모드에서 QR 이 읽혔다. 회원 QR 이면 바로 조회해 등록한다."""
         if not data.startswith("BV1:"):
-            QMessageBox.warning(
-                self, "멤버십 QR 아님",
-                "QR은 인식했지만 BreadVision 회원 QR(BV1:) 형식이 아닙니다."
-            )
+            self._set_qr_state("other")
             return
+        if data == self.qr_failed[0] and time.perf_counter() - self.qr_failed[1] < self.QR_RETRY_SEC:
+            return      # 방금 조회에 실패한 QR 을 그대로 들고 있다. Supabase 를 연타하지 않는다.
 
+        self._set_qr_state("member")
         try:
             member = self.membership_api.find_member_by_qr_payload(data)
         except Exception as e:
-            QMessageBox.critical(self, "Supabase 회원 조회 오류", str(e))
+            self.qr_failed = (data, time.perf_counter())
+            self._set_qr_state("error")
+            self.statusBar().showMessage(f"Supabase 회원 조회 오류: {e}", 8000)
             return
-
         if not member:
-            QMessageBox.warning(
-                self, "회원 없음",
-                "QR은 정상 인식했지만 Supabase에서 해당 회원을 찾지 못했습니다."
-            )
+            self.qr_failed = (data, time.perf_counter())
+            self._set_qr_state("notfound")
             return
 
         self.current_member = member
         self.refresh_member_status()
-        QMessageBox.information(
-            self, "회원 인증 완료",
-            f"{member['name']}님\n보유 포인트: {int(member['point']):,}P"
-        )
+        self.stop_qr_scan(f"회원 인증 완료 — {member['name']}님 · 보유 {int(member['point']):,}P "
+                          "(결제 완료 때 적립됩니다)")
 
 
     def refresh_member_status(self):
@@ -1096,6 +1113,8 @@ class MainWindow(QMainWindow):
         return w
 
     def ai_detect_placeholder(self):
+        if self.qr_scan_mode:
+            self.stop_qr_scan()          # 빵을 인식하겠다고 눌렀으니 QR 스캔은 그만둔다
         if not self.detector.ready():
             engine = self.settings.get("active_engine", "")
             if engine:
@@ -1743,12 +1762,8 @@ class MainWindow(QMainWindow):
             )
 
     def stop_camera(self):
-        self.last_qr_data = ""
-        self.last_qr_points = None
+        self.stop_qr_scan()
         self.qr_seen_ts = 0.0
-        self.qr_state = None
-        if hasattr(self, "qr_live_label"):
-            self.qr_live_label.setText("QR 대기 중")
         self.camera_timer.stop()
         self.collect_timer.stop()
         self.collecting = False
@@ -1850,11 +1865,17 @@ class MainWindow(QMainWindow):
         return display
 
     QR_LABEL_STYLE = {
-        "member": ("● 회원 QR 인식됨 — 스캔 버튼을 누르세요",
+        "scan": ("● QR 스캔 중 — 휴대폰 회원 QR을 카메라에 대 주세요 (빵 인식 멈춤)",
+                 "color:#2E7D32; font-size:12px; font-weight:900;"),
+        "member": ("● 회원 QR 인식 — 회원 확인 중…",
                    "color:#2E7D32; font-size:12px; font-weight:900;"),
-        "other": ("● QR 인식됨 — BreadVision 회원 QR은 아닙니다",
+        "other": ("● BreadVision 회원 QR이 아닙니다 — 앱의 QR을 보여주세요",
                   "color:#9A6700; font-size:12px; font-weight:900;"),
-        "none": ("QR 대기 중 — 휴대폰 QR을 카메라에 보여주세요",
+        "notfound": ("● 등록되지 않은 회원 QR입니다 — 앱에서 다시 로그인해 주세요",
+                     "color:#9A6700; font-size:12px; font-weight:900;"),
+        "error": ("● 회원 조회 실패 — 인터넷 연결을 확인하세요",
+                  "color:#C62828; font-size:12px; font-weight:900;"),
+        "none": ("「회원 QR 스캔」을 누르고 휴대폰 QR을 카메라에 대 주세요",
                  "color:#8D6E63; font-size:12px; font-weight:700;"),
     }
 
@@ -2487,18 +2508,22 @@ class MainWindow(QMainWindow):
     def on_qr_result(self, data, points):
         """QR 스레드가 결과를 보내왔다. (GUI 스레드에서 실행된다)
 
+        스캔 모드에서 읽힌 QR 은 바로 회원 조회로 넘긴다 (_auto_member_from_qr).
+
         한 번 읽힌 QR 은 QR_HOLD_SEC 동안 유지한다. 손이 흔들려 한두 번
         놓쳐도 초록 테두리가 깜빡이지 않게 하기 위해서다.
 
-        유지 시간은 결과 개수가 아니라 시각으로 잰다. 결과는 QR_EVERY 프레임마다,
+        유지 시간은 결과 개수가 아니라 시각으로 잰다. 결과는 QR_SCAN_EVERY 프레임마다,
         그것도 워커가 비어 있을 때만 오므로 개수로 세면 카메라 fps 에 따라
         수 초~수십 초씩 늘어나 QR 을 치워도 테두리가 남는다.
         """
+        if not self.qr_scan_mode:
+            return          # 스캔을 끝낸 뒤에 늦게 도착한 결과
         if data:
             self.last_qr_data = data
             self.last_qr_points = points
             self.qr_seen_ts = time.perf_counter()
-            self._set_qr_state("member" if data.startswith("BV1:") else "other")
+            self._auto_member_from_qr(data)
             return
         self._expire_qr(time.perf_counter())
 
@@ -2506,9 +2531,11 @@ class MainWindow(QMainWindow):
         """마지막으로 읽힌 지 QR_HOLD_SEC 가 지났으면 QR 표시와 값을 지운다."""
         if self.last_qr_data and now - self.qr_seen_ts <= self.QR_HOLD_SEC:
             return
+        if not self.last_qr_data:
+            return
         self.last_qr_data = ""
         self.last_qr_points = None
-        self._set_qr_state("none")
+        self._set_qr_state("scan" if self.qr_scan_mode else "none")
 
     def update_frame(self):
         # ── 이벤트 루프가 밀렸는지 먼저 잰다 ──────────────────────────────
@@ -2561,14 +2588,20 @@ class MainWindow(QMainWindow):
 
         current = self.tabs.currentIndex()
 
+        # QR 은 스캔 모드(「회원 QR 스캔」)에서만 찾는다.
         # QR 디코딩은 한 장에 27ms 쯤 든다 (실측). GUI 스레드에서 돌리면 그만큼 멈추므로
         # 전담 스레드에 던지기만 하고 결과는 on_qr_result 로 받는다.
-        # QR 표시는 POS 탭에만 있으므로 그 탭에서 QR_EVERY 프레임마다 한 번만 보낸다.
-        self.qr_frame_tick += 1
-        if (current == self.TAB_POS and self.qr_frame_tick >= self.QR_EVERY
-                and not self.qr_worker.busy):
-            self.qr_frame_tick = 0
-            self.qr_worker.submit(frame.copy())
+        # POS 탭을 떠나거나 QR_SCAN_TIMEOUT_SEC 가 지나면 스캔을 끝내고 빵 인식으로 돌아간다.
+        if self.qr_scan_mode:
+            if current != self.TAB_POS:
+                self.stop_qr_scan()
+            elif now - self.qr_scan_started > self.QR_SCAN_TIMEOUT_SEC:
+                self.stop_qr_scan("QR 을 찾지 못해 스캔을 끝냈습니다. 다시 누르면 스캔합니다.")
+            else:
+                self.qr_frame_tick += 1
+                if self.qr_frame_tick >= self.QR_SCAN_EVERY and not self.qr_worker.busy:
+                    self.qr_frame_tick = 0
+                    self.qr_worker.submit(frame.copy())
 
         # QR 검사 결과가 안 오는 동안(다른 탭, 워커 지연)에도 시간이 지나면 지운다.
         self._expire_qr(now)
@@ -2583,12 +2616,19 @@ class MainWindow(QMainWindow):
 
         # 보이지 않는 탭까지 그릴 이유가 없다.
         if current == self.TAB_POS:
-            if (hasattr(self, "live_detect_check")
+            # 스캔 모드에서는 빵을 찾지도 그리지도 않는다.
+            if (not self.qr_scan_mode and hasattr(self, "live_detect_check")
                     and self.live_detect_check.isChecked()):
                 self.update_live_detections(frame, now)
             else:
                 self.live_dets = []
             overlay = self._draw_qr_overlay(frame, qr_data, qr_points)
+            if self.qr_scan_mode:
+                if overlay is frame:
+                    overlay = frame.copy()
+                for color, thick in (((0, 0, 0), 5), ((0, 200, 0), 2)):
+                    cv2.putText(overlay, "QR SCAN - show member QR", (18, 40),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, thick, cv2.LINE_AA)
             shown = self.pos_dets(self.live_dets)
             if shown:
                 # QR 오버레이가 원본을 그대로 넘겼을 수 있으니 여기서 한 번 복사
