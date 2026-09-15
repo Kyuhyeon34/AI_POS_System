@@ -5,7 +5,7 @@ PC 의 POS 프로그램이 사진(JPEG)을 보내면 빵 위치와 이름을 JSO
 
 보통은 직접 실행하지 않고 ./jetson/start.sh 가 켠다 (database/settings.json 의 모델 사용).
 직접 켤 때:
-    python3 inference_server.py --engine models/bread_0911.engine --ensemble models/m12_B.engine --port 8092
+    python3 inference_server.py --engine models/m13_A.engine --ensemble models/m13_B.engine --port 8092
 확인:
     curl http://localhost:8092/health
 """
@@ -371,8 +371,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/ensemble":
             try:
                 req = json.loads(body.decode("utf-8")) if body else {}
-                engines = [jetson_ops.remember_engine(e) if e else e
-                           for e in req.get("engines", [])]
+                # 경로만 푼다. remember_engine 은 active_engine 까지 덮어써서, 재부팅하면
+                # 짝이 대표 모델 자리로 올라가 같은 모델 둘로 켜졌다 (2026-09-15).
+                engines = [str(jetson_ops.safe_path(e)) for e in req.get("engines", []) if e]
                 res = submit("ensemble", engines, timeout=180.0)
                 jetson_ops.remember_ensemble((res.get("ensemble") or [])[1:])
                 self._json(res)

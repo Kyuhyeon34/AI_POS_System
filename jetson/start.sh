@@ -40,7 +40,7 @@ s = json.loads(Path("database/settings.json").read_text(encoding="utf-8"))
 def full(p):
     p = Path(p)
     return str(p if p.is_absolute() else (root / p))
-eng = full(s.get("active_engine") or "models/bread_0911.engine")
+eng = full(s.get("active_engine") or "models/m13_A.engine")
 ens = ",".join(full(e) for e in (s.get("ensemble_engines") or []))
 print(eng, ens or "-")
 PY
