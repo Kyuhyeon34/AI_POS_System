@@ -1,0 +1,40 @@
+# 코드를 올릴 때마다 GitHub 에서 테스트를 자동으로 돌린다.
+# 카메라·GPU·젯슨·인터넷 없이 도는 테스트만 있다 (tests/ 참고).
+# 결과는 저장소의 Actions 탭, 또는 커밋 옆 초록 체크/빨간 X 로 보인다.
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 = 젯슨(JetPack 6), 3.11 = PC(README 설치 안내)
+        python-version: ["3.10", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: 화면 없이 Qt 를 띄우는 데 필요한 시스템 라이브러리
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1
+          sudo apt-get install -y libglib2.0-0t64 || sudo apt-get install -y libglib2.0-0
+
+      - name: 파이썬 패키지
+        run: pip install -r requirements-ci.txt
+
+      - name: 테스트
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -v

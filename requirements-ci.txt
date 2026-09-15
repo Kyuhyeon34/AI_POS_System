@@ -1,0 +1,9 @@
+# 테스트용 (GitHub Actions, 또는 PC 에서 pytest 를 돌릴 때).
+#   py -3.11 -m pip install -r requirements-ci.txt
+#   py -3.11 -m pytest
+# 화면이 없는 서버라 opencv 는 headless 판을 쓴다.
+numpy
+opencv-python-headless>=4.5
+PyQt5>=5.15
+requests>=2.28
+pytest>=7

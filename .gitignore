@@ -29,6 +29,10 @@ __pycache__/
 *.bak*
 *.orig
 *.log
+*.tmp
+.pytest_cache/
+.venv/
+venv/
 .vscode/
 .idea/
 
