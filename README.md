@@ -549,7 +549,13 @@ breadvision/
 ├ pc_link.py                PC: 젯슨 자동 찾기
 ├ jetson/                   젯슨 설치·켜기·끄기·상태·엔진 스크립트
 ├ ai/                       인식·앙상블(fuse.py)·합성
+├ core/                     Qt 없이 도는 계산 — 주문 금액·상품 목록·설정·박스·수집 라벨 규칙·로그
 ├ gui/                      POS 화면
+│ ├ main_window.py          탭 조립과 연결만
+│ ├ context.py              탭들이 함께 쓰는 상태 + 변경 신호
+│ ├ camera_controller.py    카메라 켜기·끄기·바꾸기, 화면 갱신 박자
+│ └ tabs/                   탭 하나 = 파일 하나 (pos · member_qr · product · collect · train · member)
+├ tests/                    자동 테스트 (pytest)
 ├ camera/                   카메라 입력
 ├ database/                 빵 목록·설정 기본값 (*.default.json, *.example.json)
 ├ models/                   AI 모델: 엔진(.engine, 기본 4개)·ONNX·pt + 클래스 목록·역할 분담 파일
@@ -558,5 +564,31 @@ breadvision/
 ├ membership/               회원·포인트 (Supabase)
 └ docs/                     안드로이드 앱 연동 문서
 ```
+
+---
+
+## 13. 테스트와 로그
+
+### 자동 테스트
+카메라·GPU·젯슨·인터넷 없이 도는 테스트가 `tests/` 에 있습니다. GitHub 에 올리면 **Actions** 탭에서 자동으로 돌고, 커밋 옆에 초록 체크(통과) / 빨간 X(실패)가 뜹니다.
+
+PC 에서 직접 돌리기 (PowerShell):
+```powershell
+py -3.11 -m pip install -r requirements-ci.txt
+py -3.11 -m pytest
+```
+
+| 파일 | 확인하는 것 |
+|---|---|
+| `test_fuse.py` | 앙상블 결합 — 한 모델만 본 빵이 0.55 문턱 아래로 깎이지 않는지, 합의 보너스, 교차 억제 |
+| `test_detector_postprocess.py` | TensorRT 출력 해석·letterbox 되돌리기·겹친 박스 제거 |
+| `test_jetson_ops.py` | 젯슨 원격 작업의 안전장치 (프로젝트 밖 경로·확장자·작업 이름 거부) |
+| `test_core_cart.py` | 주문 금액·수량 계산 |
+| `test_collect_labeler.py` | 수집 탭 「여러 개」 방식의 지정·무시·고정 규칙 |
+| `test_gui_smoke.py` | 가짜 카메라·추론기로 POS 창 전체를 띄워 인식 → 주문 → QR → 결제, 상품 등록, 수집을 눌러 봄 |
+
+### 로그
+POS 는 `사용자폴더\.breadvision\logs\pos.log` 에 기록합니다 (2MB 씩 3개까지). 오류가 나면 이 파일에 시각·위치·원인이 남습니다.
+젯슨 추론 서버는 전처럼 `~/.breadvision/logs/infer.log` 입니다. 자세한 로그가 필요하면 `BREADVISION_DEBUG=1` 로 켜세요.
 
 **git 에 들어가지 않는 것** (`.gitignore`): 기본 4개 모델 외의 TensorRT 엔진(젯슨마다 새로 만듦), 데이터셋·학습 결과, 현장 설정(`database/settings.json`, `products.json`, `jetson.json`)
