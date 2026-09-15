@@ -27,6 +27,10 @@ import glob
 import sys
 import time
 
+from core.log import get_logger
+
+log = get_logger("motor")
+
 BAUD = 115200
 # 보드가 리셋된 뒤 부팅될 시간. 이걸 안 기다리면 첫 명령이 씹힌다.
 BOOT_WAIT = 2.0
@@ -57,8 +61,8 @@ class Turntable:
             parts = self.info().split()
             self.step_us = int(parts[1])
             self.steps_per_rev = int(parts[2])
-        except Exception:
-            pass
+        except Exception as e:          # noqa: BLE001 - 옛 펌웨어는 ? 응답 형식이 다르다
+            log.warning("보드 설정을 읽지 못해 기본값(1500us, 4076스텝)으로 계산합니다: %s", e)
         if self.step_us > 6000:
             # 앞 실행에서 느리게 바꿔 둔 값이 남아 있으면 한 바퀴에 몇 분씩 걸린다.
             # 기본으로 되돌리고 알려 준다.
@@ -66,8 +70,8 @@ class Turntable:
             try:
                 self.set_speed(1500)
                 self.step_us = 1500
-            except Exception:
-                pass
+            except Exception as e:      # noqa: BLE001
+                log.warning("스텝 간격을 1500us 로 되돌리지 못했습니다 — 회전이 매우 느릴 수 있습니다: %s", e)
 
     # ── 연결 ────────────────────────────────────────────────────────
     @staticmethod
@@ -241,8 +245,8 @@ class Turntable:
     def close(self):
         try:
             self.release()
-        except Exception:
-            pass
+        except Exception as e:          # noqa: BLE001 - 포트는 아래에서 반드시 닫는다
+            log.warning("코일을 끄지 못했습니다 (모터가 뜨거워질 수 있음): %s", e)
         self.ser.close()
 
     def __enter__(self):

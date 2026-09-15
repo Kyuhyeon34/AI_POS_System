@@ -10,6 +10,10 @@ import json
 import urllib.error
 import urllib.request
 
+from core.log import get_logger
+
+log = get_logger("ops")
+
 TIMEOUT = 15.0
 UPLOAD_TIMEOUT = 600.0        # 수집 ZIP 은 수십 MB 라 넉넉히
 
@@ -34,7 +38,7 @@ class OpsClient:
             # 서버가 이유를 JSON 으로 알려준다. 그걸 그대로 보여줘야 원인을 안다.
             try:
                 msg = json.loads(e.read().decode("utf-8")).get("error", "")
-            except Exception:
+            except (OSError, ValueError, AttributeError):
                 msg = ""
             raise RuntimeError(msg or f"HTTP {e.code}")
 
@@ -49,7 +53,8 @@ class OpsClient:
             info = self._get("/health")
             self.available = bool(info.get("ops"))
             return info
-        except Exception:
+        except (OSError, ValueError) as e:      # URLError·timeout 은 OSError 의 한 종류다
+            log.info("젯슨 작업 서버에 연결하지 못했습니다: %s (%s)", self.url, e)
             self.available = False
             return None
 

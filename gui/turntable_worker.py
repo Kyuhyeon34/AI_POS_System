@@ -22,6 +22,10 @@ import urllib.request
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from core.log import get_logger
+
+log = get_logger("turntable")
+
 
 class RemoteTable:
     """젯슨에 붙은 턴테이블을 HTTP 로 돌린다.
@@ -58,7 +62,7 @@ class RemoteTable:
         except urllib.error.HTTPError as e:
             try:
                 msg = json.loads(e.read().decode("utf-8")).get("error", "")
-            except Exception:
+            except (OSError, ValueError, AttributeError):
                 msg = ""
             raise RuntimeError(msg or f"HTTP {e.code}")
 
@@ -94,8 +98,8 @@ class RemoteTable:
     def close(self):
         try:
             self._post("/turn/release", {})
-        except Exception:
-            pass
+        except (OSError, ValueError, RuntimeError) as e:
+            log.warning("젯슨 턴테이블 코일을 끄지 못했습니다 (모터가 뜨거워질 수 있음): %s", e)
 
 
 class TurntableWorker(QThread):
@@ -156,7 +160,7 @@ class TurntableWorker(QThread):
             return target
         except Exception as e:
             self._side_ok = False
-            print(f"[턴테이블] 좌우 모터를 쓸 수 없어 끕니다: {e}")
+            log.warning("좌우 모터를 쓸 수 없어 끕니다: %s", e)
             return side
 
     def side_wait(self, deg):
@@ -202,7 +206,8 @@ class TurntableWorker(QThread):
             here = self.table.positions()
             start1, start2 = here.get("turn", 0.0), here.get("side", 0.0)
             rev1, rev2 = here.get("rev", rev1), here.get("rev2", rev2)
-        except Exception:
+        except Exception as e:              # noqa: BLE001 - 옛 서버는 위치 조회가 없다
+            log.warning("시작 위치를 읽지 못해 0도로 가정합니다: %s", e)
             start1 = start2 = 0.0
 
         # 속도는 한 번만 (세 구간 모두 같은 속도라 다시 보낼 필요가 없다)
@@ -213,7 +218,7 @@ class TurntableWorker(QThread):
                 self.table.set_speed2(self.leg_speed(*legs2[0], rev=rev2, floor=self.MIN_STEP_US2))
             except Exception as e:
                 self._side_ok = False
-                print(f"[턴테이블] 좌우 모터를 쓸 수 없어 끕니다: {e}")
+                log.warning("좌우 모터를 쓸 수 없어 끕니다: %s", e)
 
         def send(idx1, idx2):
             """각 모터의 다음 구간을 보낸다."""
@@ -224,7 +229,7 @@ class TurntableWorker(QThread):
                     self.table.rotate2(legs2[idx2][0])
                 except Exception as e:
                     self._side_ok = False
-                    print(f"[턴테이블] 좌우 모터를 쓸 수 없어 끕니다: {e}")
+                    log.warning("좌우 모터를 쓸 수 없어 끕니다: %s", e)
 
         i1, i2 = [0], [0]                  # 지금 몇 번째 구간인지 (뒤 스레드와 같이 본다)
         busy = threading.Event()
@@ -245,7 +250,7 @@ class TurntableWorker(QThread):
                     i2[0] += 1
                     self.table.rotate2(legs2[i2[0]][0])
             except Exception as e:
-                print(f"[턴테이블] 다음 구간을 보내지 못했습니다: {e}")
+                log.warning("다음 구간을 보내지 못했습니다: %s", e)
             finally:
                 busy.clear()
 
@@ -290,11 +295,12 @@ class TurntableWorker(QThread):
         for stop in ("stop1", "stop2"):
             try:
                 getattr(self.table, stop)()
-            except Exception:
-                pass
+            except Exception as e:          # noqa: BLE001 - 하나가 실패해도 나머지는 멈춰야 한다
+                log.warning("모터 정지(%s) 실패: %s", stop, e)
         try:
             now = self.table.positions()
-        except Exception:
+        except Exception as e:              # noqa: BLE001
+            log.warning("위치를 읽지 못해 제자리로 돌리지 못했습니다: %s", e)
             return
         here1 = now.get("turn", 0.0) - start1
         here2 = now.get("side", 0.0) - start2
@@ -308,7 +314,13 @@ class TurntableWorker(QThread):
             if abs(here2) > 0.2 and self._side_ok:
                 time.sleep(self.side_wait(here2))
         except Exception as e:
-            print(f"[턴테이블] 제자리로 돌리지 못했습니다: {e}")
+            log.warning("제자리로 돌리지 못했습니다: %s", e)
+
+    def _close_table(self):
+        try:
+            self.table.close()
+        except Exception as e:              # noqa: BLE001 - 시리얼/HTTP 어느 쪽이든 닫기만 하면 된다
+            log.warning("턴테이블 연결을 닫지 못했습니다: %s", e)
 
     def shot_done(self):
         """GUI 스레드가 한 장 저장했다고 알려 준다."""
@@ -339,10 +351,7 @@ class TurntableWorker(QThread):
             except Exception as e:
                 self.failed.emit(str(e))
             finally:
-                try:
-                    self.table.close()
-                except Exception:
-                    pass
+                self._close_table()
                 self.done.emit()
             return
 
@@ -379,8 +388,5 @@ class TurntableWorker(QThread):
         except Exception as e:
             self.failed.emit(str(e))
         finally:
-            try:
-                self.table.close()
-            except Exception:
-                pass
+            self._close_table()
             self.done.emit()

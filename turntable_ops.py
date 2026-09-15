@@ -13,6 +13,10 @@ PC 쪽 gui/turntable_worker.py 가 이 창구를 쓴다.
 import threading
 import time
 
+from core.log import get_logger
+
+log = get_logger("turntable")
+
 _lock = threading.Lock()
 _table = None
 _error = None
@@ -38,7 +42,8 @@ def available():
     try:
         from motor_serial import Turntable
         return bool(Turntable.candidates())
-    except Exception:
+    except Exception as e:              # noqa: BLE001 - /health 에서 매번 부르므로 서버를 막으면 안 된다
+        log.debug("턴테이블 확인 실패: %s", e)
         return False
 
 
@@ -214,7 +219,7 @@ def close():
         if _table is not None:
             try:
                 _table.close()
-            except Exception:
-                pass
+            except Exception as e:      # noqa: BLE001
+                log.warning("턴테이블 연결을 닫지 못했습니다: %s", e)
             _table = None
         return {"closed": True}

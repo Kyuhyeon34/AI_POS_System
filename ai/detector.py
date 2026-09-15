@@ -4,6 +4,9 @@ import cv2
 import numpy as np
 
 from ai.render import draw_detections
+from core.log import get_logger
+
+log = get_logger("detector")
 
 _CUDA_CTX = None      # 프로세스 전체가 함께 쓰는 CUDA 컨텍스트
 _CUDA_USERS = 0       # 이걸 쓰고 있는 디텍터 수
@@ -363,8 +366,9 @@ class JetsonTensorRTDetector:
             try:
                 self._ctx.pop()
                 self._ctx.detach()
-            except Exception:
-                pass
+            except Exception as e:      # noqa: BLE001 - pycuda 오류 종류가 버전마다 다르다
+                # 종료 중이라 되돌릴 방법은 없다. 다음 실행에서 GPU 가 안 잡히면 원인이 여기 남는다.
+                log.warning("CUDA 컨텍스트 정리 실패: %s", e)
             _CUDA_CTX = None
         self._ctx = None
 

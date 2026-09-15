@@ -40,6 +40,10 @@ from PyQt5.QtWidgets import (
     QProgressBar, QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
 
+from core.log import get_logger
+
+log = get_logger("autolabel")
+
 BASE_DIR = Path(__file__).resolve().parent
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 STATE_NAME = ".autolabel.json"
@@ -104,7 +108,10 @@ def products():
         data = json.loads((BASE_DIR / "database" / "products.json").read_text(encoding="utf-8"))
         return [(data[k]["class_name"], data[k].get("display_name", ""))
                 for k in sorted(data, key=int)]
-    except Exception:
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError, KeyError) as e:
+        log.warning("database/products.json 을 읽지 못했습니다: %s", e)
         return []
 
 
@@ -156,7 +163,10 @@ class FolderState:
         self.path = Path(folder) / STATE_NAME
         try:
             self.data = json.loads(self.path.read_text(encoding="utf-8"))
-        except Exception:
+        except FileNotFoundError:
+            self.data = {}
+        except (OSError, ValueError) as e:
+            log.warning("검수 상태 파일이 깨져 새로 시작합니다: %s (%s)", self.path, e)
             self.data = {}
         self.files = self.data.setdefault("files", {})
 
@@ -246,8 +256,8 @@ def url_of(entry):
 def save_server(url):
     try:
         write_text(SERVER_CONFIG, json.dumps({"url": url}) + "\n")
-    except Exception:
-        pass
+    except OSError as e:
+        log.warning("젯슨 주소를 저장하지 못했습니다 (다음 실행 때 다시 찾습니다): %s", e)
 
 
 def _saved_hosts():

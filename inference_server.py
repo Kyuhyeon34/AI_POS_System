@@ -22,6 +22,9 @@ import numpy as np
 
 import jetson_ops
 import turntable_ops
+from core.log import get_logger, setup_logging
+
+log = get_logger("infer")
 
 BASE_DIR = Path(__file__).resolve().parent
 SETTINGS_PATH = BASE_DIR / "database" / "settings.json"
@@ -32,9 +35,12 @@ state = {"ready": False, "model_path": None, "conf": 0.45, "imgsz": 640,
 
 
 def saved_engine():
+    if not SETTINGS_PATH.exists():
+        return ""
     try:
         return json.loads(SETTINGS_PATH.read_text(encoding="utf-8")).get("active_engine", "")
-    except Exception:
+    except (OSError, ValueError) as e:
+        log.error("settings.json 을 읽지 못했습니다: %s", e)
         return ""
 
 
@@ -46,13 +52,16 @@ def _full(path):
 
 def _names_of(engine_path):
     """엔진이 학습한 클래스 목록. 변환할 때 옆에 둔 <engine>.names.json 을 읽는다."""
+    f = Path(str(engine_path) + ".names.json")
+    if not f.exists():
+        return None
     try:
-        f = Path(str(engine_path) + ".names.json")
-        if f.exists():
-            return json.loads(f.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return None
+        return json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        # 파일이 깨지면 짝 확인을 못 한다. 조용히 넘기면 클래스가 다른 모델이 붙어
+        # 와플 위에 pizza 가 뜨던 문제(2026-09-11)가 다시 날 수 있으니 분명히 남긴다.
+        log.error("클래스 목록 파일이 깨져 읽지 못했습니다: %s (%s)", f, e)
+        return None
 
 
 _SCOPES = {}
@@ -66,11 +75,12 @@ def _scope_of(engine_path):
     """
     key = str(engine_path)
     if key not in _SCOPES:
+        f = Path(key + ".scope.json")
         try:
-            f = Path(key + ".scope.json")
             _SCOPES[key] = (set(json.loads(f.read_text(encoding="utf-8"))["classes"])
                             if f.exists() else None)
-        except Exception:
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            log.error("역할 분담 파일을 읽지 못해 이 모델은 전부 아는 것으로 봅니다: %s (%s)", f, e)
             _SCOPES[key] = None
     return _SCOPES[key]
 
@@ -81,6 +91,14 @@ def _same_classes(primary, mate):
     if a is None or b is None:
         return None
     return a == b
+
+
+def _close_quietly(detector):
+    """앙상블 짝을 내릴 때. 닫다가 실패해도 새 모델 적용은 계속해야 하므로 기록만 남긴다."""
+    try:
+        detector.close()
+    except Exception as e:          # noqa: BLE001 - TensorRT/pycuda 가 던지는 종류가 제각각이다
+        log.warning("모델을 닫지 못했습니다: %s (%s)", getattr(detector, "model_path", "?"), e)
 
 
 def worker(engine_path, conf, extra_engines=(), min_votes=1):
@@ -122,9 +140,9 @@ def worker(engine_path, conf, extra_engines=(), min_votes=1):
             state["ensemble"] = [detector.model_path] + [d.model_path for d in mates]
             state["min_votes"] = min_votes
             print(f"[앙상블] 모델 {len(mates)+1}개, 동의 최소 {min_votes}표")
-    except Exception as e:
+    except Exception as e:          # noqa: BLE001 - 서버는 켜 두고 /health 로 원인을 알린다
         state["error"] = str(e)
-        print(f"[오류] 모델 로드 실패: {e}")
+        log.exception("모델 로드 실패")
 
     while True:
         kind, payload, reply = jobs.get()
@@ -149,16 +167,15 @@ def worker(engine_path, conf, extra_engines=(), min_votes=1):
                 if mates:
                     old = [d.model_path for d in mates]
                     for d in mates:
-                        try:
-                            d.close()
-                        except Exception:
-                            pass
+                        _close_quietly(d)
                     mates.clear()
                     state["ensemble"] = None
                     try:
                         jetson_ops.remember_ensemble([])     # 재부팅 때 옛 짝이 다시 붙지 않게
-                    except Exception:
-                        pass
+                    except OSError as e:
+                        # 저장에 실패하면 재부팅 때 옛 짝이 다시 붙는다. /health 로 PC 에도 알린다.
+                        log.error("앙상블 해제를 settings.json 에 저장하지 못했습니다: %s", e)
+                        state["warning"] = f"앙상블 해제 저장 실패 (재부팅하면 옛 짝이 다시 붙음): {e}"
                     print(f"[앙상블] 모델을 교체했으므로 짝을 내렸습니다: {old}\n"
                           f"        새 모델 하나로 돕니다. 앙상블을 다시 쓰려면 "
                           f"POST /ensemble 로 짝을 지정하세요.")
@@ -170,10 +187,7 @@ def worker(engine_path, conf, extra_engines=(), min_votes=1):
             elif kind == "ensemble":
                 # 앙상블 짝을 통째로 다시 지정한다. 두 모델을 새로 학습한 뒤 쓴다.
                 for d in mates:
-                    try:
-                        d.close()
-                    except Exception:
-                        pass
+                    _close_quietly(d)
                 mates.clear()
                 loaded = []
                 for ep in payload:
@@ -214,7 +228,8 @@ def worker(engine_path, conf, extra_engines=(), min_votes=1):
                     "counts": {str(k): v for k, v in counts.items()},
                     "infer_ms": round(ms, 1),
                 }))
-        except Exception as e:
+        except Exception as e:      # noqa: BLE001 - 요청 하나가 실패해도 서버는 계속 돈다
+            log.exception("작업 처리 실패: %s", kind)
             reply.put(("error", str(e)))
 
 
@@ -261,6 +276,7 @@ class Handler(BaseHTTPRequestHandler):
                 "served": state["n"],
                 "avg_ms": round(avg, 1),
                 "error": state["error"],
+                "warning": state.get("warning"),
                 "ops": True,                     # 작업 실행 창구가 있는 서버인지
                 "busy": jetson_ops.running_job(),
                 "free_mb": jetson_ops.disk_free_mb(),
@@ -428,6 +444,7 @@ if __name__ == "__main__":
     ap.add_argument("--min-votes", type=int, default=1,
                     help="이만큼의 모델이 동의한 것만 남긴다 (오검출을 줄이되 놓침은 늘어난다)")
     args = ap.parse_args()
+    setup_logging("infer", to_file=False)     # start.sh 가 출력을 infer.log 로 돌려 둔다
 
     engine = _full(args.engine or saved_engine())
     if not engine:

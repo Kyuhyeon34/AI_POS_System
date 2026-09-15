@@ -23,6 +23,10 @@ import time
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from core.log import get_logger
+
+log = get_logger("worker")
+
 
 class DetectorWorker(QThread):
     """추론기를 감싼 스레드. 기존 detector 와 같은 방식으로 쓸 수 있다."""
@@ -118,13 +122,14 @@ class DetectorWorker(QThread):
         if close is not None:
             try:
                 close()
-            except Exception:
-                pass
+            except Exception as e:      # noqa: BLE001 - 종료 중이라 기록만 남긴다
+                log.warning("추론기 정리 실패: %s", e)
 
     def run(self):
         try:
             self._det = self._factory()
-        except Exception as e:
+        except Exception as e:      # noqa: BLE001 - boot() 가 호출자에게 그대로 알린다
+            log.exception("추론기를 만들지 못했습니다")
             self._start_error = str(e)
         finally:
             self._booted.set()
@@ -162,7 +167,8 @@ class DetectorWorker(QThread):
                 t0 = time.perf_counter()
                 try:
                     _, dets, _ = self._det.infer(frame, draw=False)
-                except Exception as e:      # noqa: BLE001
+                except Exception as e:      # noqa: BLE001 - GUI 가 재시도 간격을 늘린다
+                    log.debug("실시간 추론 실패: %s", e)
                     self.failed.emit(str(e))
                     continue
                 self.live_ready.emit(dets, frame_id, time.perf_counter() - t0)

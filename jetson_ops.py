@@ -20,6 +20,8 @@ import threading
 import time
 from pathlib import Path
 
+from core.jsonfile import read_json, write_json
+
 BASE_DIR = Path(__file__).resolve().parent
 IMPORT_DIR = BASE_DIR / "dataset" / "import"
 DATA_YAML = BASE_DIR / "dataset" / "data.yaml"
@@ -243,24 +245,17 @@ def running_job():
 def remember_engine(engine_path):
     """settings.json 에 현재 POS 모델을 기록한다. (서버가 다시 떠도 유지되도록)"""
     p = safe_path(engine_path)
-    try:
-        s = json.loads(SETTINGS.read_text(encoding="utf-8"))
-    except Exception:
-        s = {}
+    s = read_json(SETTINGS)          # 깨졌으면 백업해 두고 새로 쓴다 (core/jsonfile.py)
     s["active_engine"] = str(p)
-    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(SETTINGS, s)
     return str(p)
 
 
 def remember_ensemble(engines):
     """앙상블 짝(대표 모델 제외)을 기록한다. 재부팅해도 jetson/start.sh 가 같은 짝으로 띄운다."""
-    try:
-        s = json.loads(SETTINGS.read_text(encoding="utf-8"))
-    except Exception:
-        s = {}
+    s = read_json(SETTINGS)
     s["ensemble_engines"] = [str(e) for e in engines]
-    SETTINGS.write_text(json.dumps(s, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(SETTINGS, s)
 
 
 def disk_free_mb():

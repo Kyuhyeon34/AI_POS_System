@@ -4,6 +4,9 @@ import threading
 
 import cv2
 
+from core.log import get_logger
+
+log = get_logger("camera")
 
 GST = "GST"        # cv2 백엔드가 아니라 우리 파이프라인이라는 표시
 
@@ -174,8 +177,9 @@ class CameraManager:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
             cap.set(cv2.CAP_PROP_FPS, self.fps)
-        except Exception:
-            pass
+        except (cv2.error, TypeError, ValueError) as e:
+            # FOURCC 가 4글자가 아니면 TypeError 가 난다 (BREADVISION_CAM_FOURCC 오타 등)
+            log.warning("카메라 해상도/포맷 설정을 적용하지 못해 기본값으로 엽니다: %s", e)
 
     @staticmethod
     def describe(cap):
