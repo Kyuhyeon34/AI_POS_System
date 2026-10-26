@@ -1,4 +1,4 @@
-# 🥐 BreadVision — AI 빵 인식 POS
+# BreadVision — AI 객체 인식 기반 무인 계산 POS
 
 카메라로 트레이 위의 빵을 찍으면 **AI가 빵 종류와 개수를 알아서 계산대에 담아 주는** POS입니다.
 
